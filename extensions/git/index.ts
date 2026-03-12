@@ -192,6 +192,52 @@ class GitComponent implements Component {
     }
   }
 
+  /**
+   * Detect the base (default) branch for the repository.
+   * Tries: origin/HEAD symref → existence of main/master branches.
+   */
+  /**
+   * Find the fork-point commit where the current branch diverged.
+   * Walks `git log --decorate` looking for the first commit that belongs to
+   * another branch (e.g. origin/main), which is the branching point.
+   * Returns { commit, name } or null if it can't be determined.
+   */
+  private getForkPoint(): { commit: string; name: string } | null {
+    try {
+      const log = execSync(
+        "git log --format=%H%d --decorate=short --decorate-refs=refs/remotes/ --first-parent",
+        {
+          encoding: "utf-8",
+          timeout: 10000,
+          cwd: process.cwd(),
+        },
+      );
+      const currentBranch = this.branch || "";
+      for (const line of log.split("\n")) {
+        if (!line.trim()) continue;
+        const commit = line.slice(0, 40);
+        const decoMatch = line.match(/\((.+)\)/);
+        if (!decoMatch) continue;
+        // Parse decorations like "origin/main, origin/HEAD"
+        const refs = decoMatch[1].split(",").map((r) => r.trim());
+        for (const ref of refs) {
+          // Skip the remote tracking ref for the current branch itself
+          if (currentBranch && ref === `origin/${currentBranch}`) continue;
+          // Any other remote ref means we've found the fork point
+          if (ref.startsWith("origin/")) {
+            return { commit, name: ref };
+          }
+        }
+      }
+    } catch (err: any) {
+      this.ctx.ui.notify(
+        `git log failed: ${err.stderr?.trim() || err.message}`,
+        "error",
+      );
+    }
+    return null;
+  }
+
   private getSelectedFiles(): string[] {
     return [...this.selected].sort().map((i) => this.files[i].path);
   }
@@ -623,6 +669,11 @@ class GitComponent implements Component {
       this.openDiffViewer();
       return;
     }
+    // 'b' to show branch diff (all commits compared to base branch)
+    if (matchesKey(data, "b")) {
+      this.openBranchDiffViewer();
+      return;
+    }
   }
 
   private handleCommandInput(data: string): void {
@@ -804,6 +855,35 @@ class GitComponent implements Component {
     }
   }
 
+  /** Set up diff viewer state from raw diff output and switch to diff phase. */
+  private showDiff(diffOutput: string, emptyMessage: string): void {
+    if (!diffOutput.trim()) {
+      this.ctx.ui.notify(emptyMessage, "info");
+      return;
+    }
+
+    this.diffLines = diffOutput.split("\n");
+    this.diffScrollOffset = 0;
+    this.diffFocusPane = "diff";
+    this.promptScrollOffset = 0;
+    this.confirmDiscard = false;
+
+    // Build file index from diff output - parse "diff --git a/... b/..." lines
+    // Strip ANSI codes for matching since diff output is colorized
+    this.diffFileIndex = [];
+    for (let i = 0; i < this.diffLines.length; i++) {
+      const stripped = this.diffLines[i].replace(/\x1b\[[0-9;]*m/g, "");
+      const match = stripped.match(/^diff --git a\/(.+?) b\/(.+)/);
+      if (match) {
+        this.diffFileIndex.push({ line: i, name: match[2] });
+      }
+    }
+
+    this.phase = "diff-viewer";
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
   private openDiffViewer(): void {
     let diffOutput = "";
 
@@ -846,31 +926,35 @@ class GitComponent implements Component {
       } catch {}
     }
 
-    if (!diffOutput.trim()) {
-      this.ctx.ui.notify("No diff to show", "info");
+    this.showDiff(diffOutput, "No diff to show");
+  }
+
+  private openBranchDiffViewer(): void {
+    const forkPoint = this.getForkPoint();
+    if (!forkPoint) {
+      this.ctx.ui.notify(
+        "Could not find fork point — no remote branch found in git log",
+        "error",
+      );
       return;
     }
 
-    this.diffLines = diffOutput.split("\n");
-    this.diffScrollOffset = 0;
-    this.diffFocusPane = "diff";
-    this.promptScrollOffset = 0;
-    this.confirmDiscard = false;
-
-    // Build file index from diff output - parse "diff --git a/... b/..." lines
-    // Strip ANSI codes for matching since diff output is colorized
-    this.diffFileIndex = [];
-    for (let i = 0; i < this.diffLines.length; i++) {
-      const stripped = this.diffLines[i].replace(/\x1b\[[0-9;]*m/g, "");
-      const match = stripped.match(/^diff --git a\/(.+?) b\/(.+)/);
-      if (match) {
-        this.diffFileIndex.push({ line: i, name: match[2] });
-      }
+    let diffOutput = "";
+    try {
+      diffOutput = execSync(`git diff --color ${forkPoint.commit}...HEAD`, {
+        encoding: "utf-8",
+        timeout: 10000,
+        cwd: process.cwd(),
+      });
+    } catch (err: any) {
+      this.ctx.ui.notify(
+        `Branch diff failed: ${err.stderr?.trim() || err.message}`,
+        "error",
+      );
+      return;
     }
-    // Keep any existing prompt text across diff viewer re-entries
-    this.phase = "diff-viewer";
-    this.invalidate();
-    this.tui.requestRender();
+
+    this.showDiff(diffOutput, `No diff compared to ${forkPoint.name}`);
   }
 
   private handleDiffViewer(data: string): void {
@@ -1360,7 +1444,7 @@ class GitComponent implements Component {
         lines.push(
           theme.fg(
             "dim",
-            "  ↑↓ navigate • tab select • a all • u unselect • d diff • c commit • enter confirm • esc quit",
+            "  ↑↓ navigate • tab select • a all • u unselect • d diff • b branch diff • c commit • enter confirm • esc quit",
           ),
         );
       }
