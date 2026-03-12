@@ -1,5 +1,9 @@
 # 🥧 pie
 
+```
+pie[xtensions, agents, skills, and stuff]
+```
+
 My daily-use extensions for [pi](https://pi.dev), a customizable coding agent that runs in your terminal.
 
 These extensions have been incubated over time and work well for me. That said, they come with **no guarantee of support** — interfaces may change, extensions may be added or removed, and nothing here is promised to be stable.
@@ -8,8 +12,8 @@ All code is licensed under [WTFPL](LICENSE).
 
 ## Extensions
 
-| Extension | Description |
-|-----------|-------------|
+| Extension              | Description                                                                                                                                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [git](extensions/git/) | Interactive git file selector and command runner. Invoke with `/git`. Navigate files, select with tab, run commands with `{}` placeholder expansion, generate commit messages with AI, view diffs in a split pane. |
 
 ## Install
@@ -28,21 +32,13 @@ After installing, use `pi config` to enable or disable individual extensions. Ru
 
 ## Development
 
-To develop extensions locally, symlink the repo into your project's `.pi/extensions/` directory:
+The `.pi/extensions/` directory contains symlinks to each extension in `extensions/`, so running pi from this repo automatically loads them for development. Use `/reload` inside pi to pick up changes without restarting.
+
+When adding a new extension, create a matching symlink:
 
 ```bash
-# From your project root
-mkdir -p .pi/extensions
-ln -s /path/to/pie/extensions/git .pi/extensions/git
+ln -s "../../extensions/<name>" ".pi/extensions/<name>"
 ```
-
-Or symlink into your global extensions for use everywhere:
-
-```bash
-ln -s /path/to/pie/extensions/git ~/.pi/agent/extensions/git
-```
-
-Pi auto-discovers extensions in these locations. Use `/reload` inside pi to pick up changes without restarting.
 
 ## Contributing
 
