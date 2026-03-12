@@ -15,6 +15,7 @@ All code is licensed under [WTFPL](LICENSE).
 | Extension              | Description                                                                                                                                                                                                        |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [git](extensions/git/) | Interactive git file selector and command runner. Invoke with `/git`. Navigate files, select with tab, run commands with `{}` placeholder expansion, generate commit messages with AI, view diffs in a split pane. |
+| [no-sleep-while-working](extensions/no-sleep-while-working/) | Prevents your Mac from sleeping while pi is actively working. Uses `caffeinate` under the hood. |
 
 ## Install
 
