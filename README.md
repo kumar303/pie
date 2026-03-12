@@ -32,18 +32,12 @@ After installing, use `pi config` to enable or disable individual extensions. Ru
 
 ## Development
 
-The `.pi/extensions/` directory contains symlinks to each extension in `extensions/`, so running pi from this repo automatically loads them for development. Use `/reload` inside pi to pick up changes without restarting.
-
-When adding a new extension, create a matching symlink:
-
-```bash
-ln -s "../../extensions/<name>" ".pi/extensions/<name>"
-```
+The `.pi/extensions` symlink points to `./extensions`, so running pi from this repo automatically loads all extensions for development. Use `/reload` inside pi to pick up changes without restarting.
 
 ## Contributing
 
-Feel free to fork this repo and make it your own, or copy individual extensions into your own setup. Pull requests are welcome but there's no guarantee they'll be merged — this is a personal collection first.
+If you found a bug or want to improve something in here -- thank you! I can't guarantee I'll get to it, though. I recommend forking the repo or copying what you need to make it your own.
 
 ## License
 
-[WTFPL](LICENSE) — Do What The Fuck You Want To Public License.
+[WTFPL](LICENSE) — Do Whatever
