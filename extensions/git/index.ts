@@ -773,6 +773,20 @@ class GitComponent implements Component {
       return;
     }
 
+    // Bracketed paste: terminal wraps pasted content in \x1b[200~ ... \x1b[201~
+    if (data.includes("\x1b[200~")) {
+      const pasteContent = data.replace(/\x1b\[200~/g, "").replace(/\x1b\[201~/g, "");
+      if (pasteContent) {
+        // Command input is single-line, strip newlines
+        const cleaned = pasteContent.replace(/\r?\n/g, " ");
+        this.cmdInsert(cleaned);
+        this.historyIndex = -1;
+        this.invalidate();
+        this.tui.requestRender();
+      }
+      return;
+    }
+
     // Printable character input
     const ch = this.dataToPrintable(data);
     if (ch) {
