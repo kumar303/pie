@@ -148,6 +148,8 @@ class GitComponent implements Component {
   private activeDiffLines: string[] = [];
   private activeDiffFileIndex: { line: number; name: string }[] = [];
   private hideTests = false;
+  private hideWhitespace = true;
+  private diffMode: "working" | "branch" = "working";
 
   // Diff viewer prompt pane (split view)
   private diffFocusPane: "diff" | "prompt" = "diff";
@@ -931,12 +933,14 @@ class GitComponent implements Component {
     this.tui.requestRender();
   }
 
-  private openDiffViewer(): void {
+  /** Generate the diff output for the working tree (staged + unstaged + untracked). */
+  private generateWorkingDiff(): string {
     let diffOutput = "";
+    const wsFlag = this.hideWhitespace ? " -w" : "";
 
     // Show full diff of all changes (staged + unstaged), like `git diff`
     try {
-      const staged = execSync("git diff --color --cached", {
+      const staged = execSync(`git diff --color --cached${wsFlag}`, {
         encoding: "utf-8",
         timeout: 10000,
         cwd: process.cwd(),
@@ -944,7 +948,7 @@ class GitComponent implements Component {
       if (staged) diffOutput += staged;
     } catch {}
     try {
-      const unstaged = execSync("git diff --color", {
+      const unstaged = execSync(`git diff --color${wsFlag}`, {
         encoding: "utf-8",
         timeout: 10000,
         cwd: process.cwd(),
@@ -973,22 +977,23 @@ class GitComponent implements Component {
       } catch {}
     }
 
-    this.showDiff(diffOutput, "No diff to show");
+    return diffOutput;
   }
 
-  private openBranchDiffViewer(): void {
+  /** Generate the diff output for the branch (compared to fork point). */
+  private generateBranchDiff(): string | null {
     const forkPoint = this.getForkPoint();
     if (!forkPoint) {
       this.ctx.ui.notify(
         "Could not find fork point — no remote branch found in git log",
         "error",
       );
-      return;
+      return null;
     }
 
-    let diffOutput = "";
+    const wsFlag = this.hideWhitespace ? " -w" : "";
     try {
-      diffOutput = execSync(`git diff --color ${forkPoint.commit}...HEAD`, {
+      return execSync(`git diff --color${wsFlag} ${forkPoint.commit}...HEAD`, {
         encoding: "utf-8",
         timeout: 10000,
         cwd: process.cwd(),
@@ -998,10 +1003,38 @@ class GitComponent implements Component {
         `Branch diff failed: ${err.stderr?.trim() || err.message}`,
         "error",
       );
-      return;
+      return null;
     }
+  }
 
-    this.showDiff(diffOutput, `No diff compared to ${forkPoint.name}`);
+  private openDiffViewer(): void {
+    this.diffMode = "working";
+    const diffOutput = this.generateWorkingDiff();
+    this.showDiff(diffOutput, "No diff to show");
+  }
+
+  private openBranchDiffViewer(): void {
+    this.diffMode = "branch";
+    const diffOutput = this.generateBranchDiff();
+    if (diffOutput === null) return;
+    this.showDiff(diffOutput, `No diff compared to base branch`);
+  }
+
+  /** Re-run the current diff (e.g. after toggling whitespace). */
+  private refreshDiffViewer(): void {
+    let diffOutput: string | null;
+    if (this.diffMode === "branch") {
+      diffOutput = this.generateBranchDiff();
+      if (diffOutput === null) return;
+    } else {
+      diffOutput = this.generateWorkingDiff();
+    }
+    // Preserve scroll position as much as possible
+    const prevScroll = this.diffScrollOffset;
+    this.showDiff(diffOutput, "No diff to show");
+    this.diffScrollOffset = Math.min(prevScroll, Math.max(0, this.activeDiffLines.length - 1));
+    this.invalidate();
+    this.tui.requestRender();
   }
 
   private handleDiffViewer(data: string): void {
@@ -1141,6 +1174,12 @@ class GitComponent implements Component {
       this.diffScrollOffset = 0;
       this.invalidate();
       this.tui.requestRender();
+      return;
+    }
+    // w = toggle hiding whitespace changes
+    if (matchesKey(data, "w")) {
+      this.hideWhitespace = !this.hideWhitespace;
+      this.refreshDiffViewer();
       return;
     }
     // e = open current diff file in $EDITOR
@@ -1584,9 +1623,10 @@ class GitComponent implements Component {
       const currentFile = this.currentDiffFile();
       const fileLabel = currentFile ? ` │ ${currentFile}` : "";
       const testsHiddenLabel = this.hideTests ? theme.fg("warning", " (tests hidden)") : "";
+      const wsHiddenLabel = this.hideWhitespace ? theme.fg("warning", " (ws hidden)") : "";
       const diffHeader = diffFocused
-        ? theme.fg("accent", theme.bold(" ▶ Diff")) + testsHiddenLabel + theme.fg("muted", fileLabel)
-        : theme.fg("dim", "   Diff") + testsHiddenLabel + theme.fg("dim", fileLabel);
+        ? theme.fg("accent", theme.bold(" ▶ Diff")) + testsHiddenLabel + wsHiddenLabel + theme.fg("muted", fileLabel)
+        : theme.fg("dim", "   Diff") + testsHiddenLabel + wsHiddenLabel + theme.fg("dim", fileLabel);
       const promptHeader = !diffFocused
         ? theme.fg("accent", theme.bold(" ▶ Prompt"))
         : theme.fg("dim", "   Prompt");
@@ -1762,8 +1802,9 @@ class GitComponent implements Component {
           : "empty";
       lines.push(theme.fg("dim", "─".repeat(width)));
       const hideTestsHint = this.hideTests ? "t show tests" : "t hide tests";
+      const hideWsHint = this.hideWhitespace ? "w show ws" : "w hide ws";
       const helpLeft = diffFocused
-        ? `d↓ u↑ · g/G top/bottom · j/k scroll · f/F next/prev file · e edit · ${hideTestsHint}`
+        ? `d↓ u↑ · g/G top/bottom · j/k scroll · f/F next/prev file · e edit · ${hideTestsHint} · ${hideWsHint}`
         : `editing prompt (\\+enter=newline)`;
       const helpRight = this.promptText.trim()
         ? `tab switch pane · enter send · esc back`
