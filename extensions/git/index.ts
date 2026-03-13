@@ -144,6 +144,11 @@ class GitComponent implements Component {
   private diffScrollOffset = 0;
   private diffFileIndex: { line: number; name: string }[] = []; // file boundaries in diff
 
+  // Filtered diff (active view, respects hideTests toggle)
+  private activeDiffLines: string[] = [];
+  private activeDiffFileIndex: { line: number; name: string }[] = [];
+  private hideTests = false;
+
   // Diff viewer prompt pane (split view)
   private diffFocusPane: "diff" | "prompt" = "diff";
   private promptText = "";
@@ -855,6 +860,47 @@ class GitComponent implements Component {
     }
   }
 
+  /** Recompute activeDiffLines/activeDiffFileIndex based on hideTests toggle. */
+  private recomputeActiveDiff(): void {
+    if (!this.hideTests || this.diffFileIndex.length === 0) {
+      this.activeDiffLines = this.diffLines;
+      this.activeDiffFileIndex = this.diffFileIndex;
+      return;
+    }
+
+    // Build sections: each file runs from its header line to the line before the next file
+    const sections: { name: string; startLine: number; endLine: number }[] = [];
+    for (let i = 0; i < this.diffFileIndex.length; i++) {
+      const start = this.diffFileIndex[i].line;
+      const end = i + 1 < this.diffFileIndex.length
+        ? this.diffFileIndex[i + 1].line
+        : this.diffLines.length;
+      sections.push({ name: this.diffFileIndex[i].name, startLine: start, endLine: end });
+    }
+
+    // Include any preamble lines before the first file header
+    const filteredLines: string[] = [];
+    const filteredFileIndex: { line: number; name: string }[] = [];
+
+    const firstFileStart = sections.length > 0 ? sections[0].startLine : this.diffLines.length;
+    for (let i = 0; i < firstFileStart; i++) {
+      filteredLines.push(this.diffLines[i]);
+    }
+
+    const testPattern = /test/i;
+    for (const section of sections) {
+      // Match *test* pattern (case-insensitive) against the filename
+      if (testPattern.test(section.name)) continue;
+      filteredFileIndex.push({ line: filteredLines.length, name: section.name });
+      for (let i = section.startLine; i < section.endLine; i++) {
+        filteredLines.push(this.diffLines[i]);
+      }
+    }
+
+    this.activeDiffLines = filteredLines;
+    this.activeDiffFileIndex = filteredFileIndex;
+  }
+
   /** Set up diff viewer state from raw diff output and switch to diff phase. */
   private showDiff(diffOutput: string, emptyMessage: string): void {
     if (!diffOutput.trim()) {
@@ -879,6 +925,7 @@ class GitComponent implements Component {
       }
     }
 
+    this.recomputeActiveDiff();
     this.phase = "diff-viewer";
     this.invalidate();
     this.tui.requestRender();
@@ -1021,7 +1068,7 @@ class GitComponent implements Component {
   private handleDiffPaneInput(data: string): void {
     // d = scroll down half page
     if (matchesKey(data, "d")) {
-      const maxScroll = Math.max(0, this.diffLines.length - Math.max(5, 30));
+      const maxScroll = Math.max(0, this.activeDiffLines.length - Math.max(5, 30));
       this.diffScrollOffset = Math.min(this.diffScrollOffset + 10, maxScroll);
       this.invalidate();
       this.tui.requestRender();
@@ -1044,14 +1091,14 @@ class GitComponent implements Component {
     // G = go to bottom (align last line with bottom of pane)
     if (matchesKey(data, Key.shift("g"))) {
       const availableLines = Math.max(5, 30);
-      this.diffScrollOffset = Math.max(0, this.diffLines.length - availableLines);
+      this.diffScrollOffset = Math.max(0, this.activeDiffLines.length - availableLines);
       this.invalidate();
       this.tui.requestRender();
       return;
     }
     // Arrow keys / j/k for single line scroll
     if (matchesKey(data, Key.down) || matchesKey(data, "j")) {
-      const maxScroll = Math.max(0, this.diffLines.length - Math.max(5, 30));
+      const maxScroll = Math.max(0, this.activeDiffLines.length - Math.max(5, 30));
       this.diffScrollOffset = Math.min(this.diffScrollOffset + 1, maxScroll);
       this.invalidate();
       this.tui.requestRender();
@@ -1065,7 +1112,7 @@ class GitComponent implements Component {
     }
     // f = jump to next file
     if (matchesKey(data, "f")) {
-      for (const entry of this.diffFileIndex) {
+      for (const entry of this.activeDiffFileIndex) {
         if (entry.line > this.diffScrollOffset) {
           this.diffScrollOffset = entry.line;
           this.invalidate();
@@ -1077,14 +1124,23 @@ class GitComponent implements Component {
     }
     // F = jump to previous file
     if (matchesKey(data, Key.shift("f"))) {
-      for (let i = this.diffFileIndex.length - 1; i >= 0; i--) {
-        if (this.diffFileIndex[i].line < this.diffScrollOffset) {
-          this.diffScrollOffset = this.diffFileIndex[i].line;
+      for (let i = this.activeDiffFileIndex.length - 1; i >= 0; i--) {
+        if (this.activeDiffFileIndex[i].line < this.diffScrollOffset) {
+          this.diffScrollOffset = this.activeDiffFileIndex[i].line;
           this.invalidate();
           this.tui.requestRender();
           return;
         }
       }
+      return;
+    }
+    // t = toggle hiding test files
+    if (matchesKey(data, "t")) {
+      this.hideTests = !this.hideTests;
+      this.recomputeActiveDiff();
+      this.diffScrollOffset = 0;
+      this.invalidate();
+      this.tui.requestRender();
       return;
     }
     // e = open current diff file in $EDITOR
@@ -1349,7 +1405,7 @@ class GitComponent implements Component {
   /** Get the current file name based on diff scroll position */
   private currentDiffFile(): string {
     let name = "";
-    for (const entry of this.diffFileIndex) {
+    for (const entry of this.activeDiffFileIndex) {
       if (entry.line <= this.diffScrollOffset) {
         name = entry.name;
       } else {
@@ -1527,9 +1583,10 @@ class GitComponent implements Component {
       const diffFocused = this.diffFocusPane === "diff";
       const currentFile = this.currentDiffFile();
       const fileLabel = currentFile ? ` │ ${currentFile}` : "";
+      const testsHiddenLabel = this.hideTests ? theme.fg("warning", " (tests hidden)") : "";
       const diffHeader = diffFocused
-        ? theme.fg("accent", theme.bold(" ▶ Diff")) + theme.fg("muted", fileLabel)
-        : theme.fg("dim", "   Diff") + theme.fg("dim", fileLabel);
+        ? theme.fg("accent", theme.bold(" ▶ Diff")) + testsHiddenLabel + theme.fg("muted", fileLabel)
+        : theme.fg("dim", "   Diff") + testsHiddenLabel + theme.fg("dim", fileLabel);
       const promptHeader = !diffFocused
         ? theme.fg("accent", theme.bold(" ▶ Prompt"))
         : theme.fg("dim", "   Prompt");
@@ -1553,11 +1610,11 @@ class GitComponent implements Component {
       );
 
       // Build diff lines for left pane
-      const total = this.diffLines.length;
+      const total = this.activeDiffLines.length;
       const diffEnd = Math.min(this.diffScrollOffset + availableLines, total);
       const leftLines: string[] = [];
       for (let i = this.diffScrollOffset; i < diffEnd; i++) {
-        leftLines.push(truncateToWidth(" " + this.diffLines[i], diffPaneWidth));
+        leftLines.push(truncateToWidth(" " + this.activeDiffLines[i], diffPaneWidth));
       }
       // Pad diff pane
       for (let i = leftLines.length; i < availableLines; i++) {
@@ -1704,8 +1761,9 @@ class GitComponent implements Component {
           ? `${this.diffScrollOffset + 1}-${diffEnd} of ${total}`
           : "empty";
       lines.push(theme.fg("dim", "─".repeat(width)));
+      const hideTestsHint = this.hideTests ? "t show tests" : "t hide tests";
       const helpLeft = diffFocused
-        ? `d↓ u↑ · g/G top/bottom · j/k scroll · f/F next/prev file · e edit`
+        ? `d↓ u↑ · g/G top/bottom · j/k scroll · f/F next/prev file · e edit · ${hideTestsHint}`
         : `editing prompt (\\+enter=newline)`;
       const helpRight = this.promptText.trim()
         ? `tab switch pane · enter send · esc back`
