@@ -33,9 +33,13 @@ After installing, use `pi config` to enable or disable individual extensions. Ru
 
 ## Development
 
-The `.pi/extensions` symlink points to `./extensions`, so running pi from this repo automatically loads all extensions for development. Use `/reload` inside pi to pick up changes without restarting.
+To develop a specific extension locally, run pi with the `-e` flag:
 
-If you also have pie installed as a package (`pi install ...`), you'll see warnings about duplicate tool/command registrations. This is harmless — after `/reload`, the local versions take precedence.
+```bash
+pi -e ./extensions/git/
+```
+
+This loads the local version of the extension for that session.
 
 ## Contributing
 
