@@ -33,6 +33,12 @@ After installing, use `pi config` to enable or disable individual extensions. Ru
 
 ## Development
 
+Install dependencies first:
+
+```bash
+npm install
+```
+
 To develop a specific extension locally, run pi with the `-e` flag:
 
 ```bash

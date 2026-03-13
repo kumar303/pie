@@ -1980,7 +1980,7 @@ export default function (pi: ExtensionAPI) {
             tui,
             theme,
             (prompt?: string) => done(prompt),
-            (text: string) => pi.sendUserMessage(text, { deliverAs: "steer", triggerTurn: true }),
+            (text: string) => pi.sendUserMessage(text, { deliverAs: "steer" }),
             ctx,
           );
           return {
