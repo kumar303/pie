@@ -12,10 +12,10 @@ All code is licensed under [WTFPL](LICENSE).
 
 ## Extensions
 
-| Extension              | Description                                                                                                                                                                                                        |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [git](extensions/git/) | Interactive git file selector and command runner. Invoke with `/git`. Navigate files, select with tab, run commands with `{}` placeholder expansion, generate commit messages with AI, view diffs in a split pane. |
-| [no-sleep-while-working](extensions/no-sleep-while-working/) | Prevents your Mac from sleeping while pi is actively working. Uses `caffeinate` under the hood. |
+| Extension                                                    | Description                                                                                                                                                                                                        |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [git](extensions/git/)                                       | Interactive git file selector and command runner. Invoke with `/git`. Navigate files, select with tab, run commands with `{}` placeholder expansion, generate commit messages with AI, view diffs in a split pane. |
+| [no-sleep-while-working](extensions/no-sleep-while-working/) | Prevents your Mac from sleeping while pi is actively working. Uses `caffeinate` under the hood.                                                                                                                    |
 
 ## Install
 
@@ -34,6 +34,8 @@ After installing, use `pi config` to enable or disable individual extensions. Ru
 ## Development
 
 The `.pi/extensions` symlink points to `./extensions`, so running pi from this repo automatically loads all extensions for development. Use `/reload` inside pi to pick up changes without restarting.
+
+If you also have pie installed as a package (`pi install ...`), you'll see warnings about duplicate tool/command registrations. This is harmless — after `/reload`, the local versions take precedence.
 
 ## Contributing
 
