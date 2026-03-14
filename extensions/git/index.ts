@@ -149,6 +149,7 @@ class GitComponent implements Component {
   private activeDiffFileIndex: { line: number; name: string }[] = [];
   private hideTests = false;
   private hideWhitespace = true;
+  private hiddenFiles: Set<string> = new Set();
   private diffMode: "working" | "branch" = "working";
 
   // Diff viewer prompt pane (split view)
@@ -862,9 +863,9 @@ class GitComponent implements Component {
     }
   }
 
-  /** Recompute activeDiffLines/activeDiffFileIndex based on hideTests toggle. */
+  /** Recompute activeDiffLines/activeDiffFileIndex based on hideTests toggle and manually hidden files. */
   private recomputeActiveDiff(): void {
-    if (!this.hideTests || this.diffFileIndex.length === 0) {
+    if ((!this.hideTests && this.hiddenFiles.size === 0) || this.diffFileIndex.length === 0) {
       this.activeDiffLines = this.diffLines;
       this.activeDiffFileIndex = this.diffFileIndex;
       return;
@@ -891,8 +892,10 @@ class GitComponent implements Component {
 
     const testPattern = /test/i;
     for (const section of sections) {
-      // Match *test* pattern (case-insensitive) against the filename
-      if (testPattern.test(section.name)) continue;
+      // Skip test files when hideTests is active
+      if (this.hideTests && testPattern.test(section.name)) continue;
+      // Skip manually hidden files
+      if (this.hiddenFiles.has(section.name)) continue;
       filteredFileIndex.push({ line: filteredLines.length, name: section.name });
       for (let i = section.startLine; i < section.endLine; i++) {
         filteredLines.push(this.diffLines[i]);
@@ -1180,6 +1183,30 @@ class GitComponent implements Component {
     if (matchesKey(data, "w")) {
       this.hideWhitespace = !this.hideWhitespace;
       this.refreshDiffViewer();
+      return;
+    }
+    // h = hide current file from diff view
+    if (matchesKey(data, "h")) {
+      const file = this.currentDiffFile();
+      if (!file) {
+        this.ctx.ui.notify("No file at current scroll position", "error");
+        return;
+      }
+      this.hiddenFiles.add(file);
+      this.recomputeActiveDiff();
+      // Clamp scroll offset after removing lines
+      this.diffScrollOffset = Math.min(this.diffScrollOffset, Math.max(0, this.activeDiffLines.length - 1));
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+    // H = unhide all manually hidden files
+    if (matchesKey(data, Key.shift("h"))) {
+      if (this.hiddenFiles.size === 0) return;
+      this.hiddenFiles.clear();
+      this.recomputeActiveDiff();
+      this.invalidate();
+      this.tui.requestRender();
       return;
     }
     // e = open current diff file in $EDITOR
@@ -1624,9 +1651,10 @@ class GitComponent implements Component {
       const fileLabel = currentFile ? ` │ ${currentFile}` : "";
       const testsHiddenLabel = this.hideTests ? theme.fg("warning", " (tests hidden)") : "";
       const wsHiddenLabel = this.hideWhitespace ? theme.fg("warning", " (ws hidden)") : "";
+      const filesHiddenLabel = this.hiddenFiles.size > 0 ? theme.fg("warning", ` (files hidden: ${this.hiddenFiles.size})`) : "";
       const diffHeader = diffFocused
-        ? theme.fg("accent", theme.bold(" ▶ Diff")) + testsHiddenLabel + wsHiddenLabel + theme.fg("muted", fileLabel)
-        : theme.fg("dim", "   Diff") + testsHiddenLabel + wsHiddenLabel + theme.fg("dim", fileLabel);
+        ? theme.fg("accent", theme.bold(" ▶ Diff")) + testsHiddenLabel + wsHiddenLabel + filesHiddenLabel + theme.fg("muted", fileLabel)
+        : theme.fg("dim", "   Diff") + testsHiddenLabel + wsHiddenLabel + filesHiddenLabel + theme.fg("dim", fileLabel);
       const promptHeader = !diffFocused
         ? theme.fg("accent", theme.bold(" ▶ Prompt"))
         : theme.fg("dim", "   Prompt");
@@ -1803,8 +1831,9 @@ class GitComponent implements Component {
       lines.push(theme.fg("dim", "─".repeat(width)));
       const hideTestsHint = this.hideTests ? "t show tests" : "t hide tests";
       const hideWsHint = this.hideWhitespace ? "w show ws" : "w hide ws";
+      const hideFileHint = this.hiddenFiles.size > 0 ? "h hide file · H unhide all" : "h hide file";
       const helpLeft = diffFocused
-        ? `d↓ u↑ · g/G top/bottom · j/k scroll · f/F next/prev file · e edit · ${hideTestsHint} · ${hideWsHint}`
+        ? `d↓ u↑ · g/G top/bottom · j/k scroll · f/F next/prev file · e edit · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`
         : `editing prompt (\\+enter=newline)`;
       const helpRight = this.promptText.trim()
         ? `tab switch pane · enter send · esc back`
