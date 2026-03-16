@@ -203,6 +203,18 @@ class GitComponent implements Component {
     }
   }
 
+  private getRepoRoot(): string {
+    try {
+      return execSync("git rev-parse --show-toplevel", {
+        encoding: "utf-8",
+        timeout: 5000,
+        cwd: process.cwd(),
+      }).trim();
+    } catch {
+      return process.cwd();
+    }
+  }
+
   /**
    * Detect the base (default) branch for the repository.
    * Tries: origin/HEAD symref → existence of main/master branches.
@@ -1220,7 +1232,7 @@ class GitComponent implements Component {
         return;
       }
       const editor = process.env.EDITOR || "vi";
-      const absolutePath = resolve(process.cwd(), file);
+      const absolutePath = resolve(this.getRepoRoot(), file);
       try {
         // On macOS, GUI editors like `code` (VS Code) can't connect to the
         // running instance via their CLI because VSCODE_IPC_HOOK_CLI isn't
