@@ -166,6 +166,9 @@ class GitComponent implements Component {
   private sendPrompt: (text: string) => void;
   private ctx: ExtensionCommandContext;
 
+  // Prompt pane layout (set during render, used by input handlers)
+  private promptContentWidth = 0;
+
   // Caching
   private cachedLines?: string[];
   private cachedWidth?: number;
@@ -1336,31 +1339,30 @@ class GitComponent implements Component {
       return;
     }
     if (matchesKey(data, Key.up)) {
-      // Move cursor up one line
-      const { line, col } = this.promptCursorPosition();
+      // Move cursor up one visual (word-wrapped) line
+      const contentWidth = this.promptContentWidth;
+      if (contentWidth <= 0) return;
+      const { wrapMap } = this.buildPromptWrapMap(contentWidth);
+      const { line, col } = this.promptCursorInWrapMap(wrapMap);
       if (line > 0) {
-        const lines = this.promptText.split("\n");
-        const prevLineLen = lines[line - 1].length;
-        const newCol = Math.min(col, prevLineLen);
-        let newPos = 0;
-        for (let i = 0; i < line - 1; i++) newPos += lines[i].length + 1;
-        newPos += newCol;
-        this.promptCursor = newPos;
+        const prevLine = wrapMap[line - 1];
+        const newCol = Math.min(col, prevLine.length);
+        this.promptCursor = prevLine.textOffset + newCol;
         this.invalidate();
         this.tui.requestRender();
       }
       return;
     }
     if (matchesKey(data, Key.down)) {
-      const { line, col } = this.promptCursorPosition();
-      const lines = this.promptText.split("\n");
-      if (line < lines.length - 1) {
-        const nextLineLen = lines[line + 1].length;
-        const newCol = Math.min(col, nextLineLen);
-        let newPos = 0;
-        for (let i = 0; i <= line; i++) newPos += lines[i].length + 1;
-        newPos += newCol;
-        this.promptCursor = newPos;
+      // Move cursor down one visual (word-wrapped) line
+      const contentWidth = this.promptContentWidth;
+      if (contentWidth <= 0) return;
+      const { wrapMap } = this.buildPromptWrapMap(contentWidth);
+      const { line, col } = this.promptCursorInWrapMap(wrapMap);
+      if (line < wrapMap.length - 1) {
+        const nextLine = wrapMap[line + 1];
+        const newCol = Math.min(col, nextLine.length);
+        this.promptCursor = nextLine.textOffset + newCol;
         this.invalidate();
         this.tui.requestRender();
       }
@@ -1481,11 +1483,75 @@ class GitComponent implements Component {
     return name;
   }
 
-  /** Get line/col of the prompt cursor */
+  /** Get line/col of the prompt cursor (logical lines, split by \n) */
   private promptCursorPosition(): { line: number; col: number } {
     const before = this.promptText.slice(0, this.promptCursor);
     const lines = before.split("\n");
     return { line: lines.length - 1, col: lines[lines.length - 1].length };
+  }
+
+  /** Build the wrap map for the prompt text given content width.
+   *  Each entry maps a visual (wrapped) line to a range in the original text. */
+  private buildPromptWrapMap(contentWidth: number): { wrappedLines: string[]; wrapMap: { textOffset: number; length: number }[] } {
+    const wrappedLines: string[] = [];
+    const wrapMap: { textOffset: number; length: number }[] = [];
+
+    if (this.promptText.length === 0) {
+      wrappedLines.push("");
+      wrapMap.push({ textOffset: 0, length: 0 });
+      return { wrappedLines, wrapMap };
+    }
+
+    const rawLines = this.promptText.split("\n");
+    let textOffset = 0;
+    for (const rawLine of rawLines) {
+      if (rawLine.length <= contentWidth) {
+        wrappedLines.push(rawLine);
+        wrapMap.push({ textOffset, length: rawLine.length });
+      } else {
+        // Word-wrap long lines
+        let pos = 0;
+        while (pos < rawLine.length) {
+          let end = pos + contentWidth;
+          if (end >= rawLine.length) {
+            end = rawLine.length;
+          } else {
+            // Try to break at a word boundary
+            let breakAt = end;
+            while (breakAt > pos && rawLine[breakAt] !== " ") breakAt--;
+            if (breakAt > pos) {
+              end = breakAt + 1; // include the space at end of this line
+            }
+            // else: no word boundary found, hard break at contentWidth
+          }
+          const segment = rawLine.slice(pos, end);
+          wrappedLines.push(segment);
+          wrapMap.push({ textOffset: textOffset + pos, length: segment.length });
+          pos = end;
+        }
+      }
+      textOffset += rawLine.length + 1; // +1 for \n
+    }
+
+    return { wrappedLines, wrapMap };
+  }
+
+  /** Find the cursor's position in wrapped visual lines */
+  private promptCursorInWrapMap(wrapMap: { textOffset: number; length: number }[]): { line: number; col: number } {
+    let remaining = this.promptCursor;
+    for (let i = 0; i < wrapMap.length; i++) {
+      const { length } = wrapMap[i];
+      if (remaining <= length || i === wrapMap.length - 1) {
+        return { line: i, col: Math.min(remaining, length) };
+      }
+      remaining -= length;
+      // If this visual line ends at a newline in the original text, consume it
+      const lineEndOffset = wrapMap[i].textOffset + length;
+      if (lineEndOffset < this.promptText.length && this.promptText[lineEndOffset] === "\n") {
+        remaining--;
+      }
+    }
+    return { line: 0, col: 0 };
   }
 
   /** Find previous word boundary (for option+left / option+delete) */
@@ -1691,76 +1757,10 @@ class GitComponent implements Component {
 
       // Build prompt lines for right pane with word wrapping
       const promptContentWidth = promptPaneWidth - 1; // 1 char left margin
-      const wrappedLines: string[] = []; // visual lines after wrapping
-      const wrapMap: { textOffset: number; length: number }[] = []; // maps visual line → text offset
+      this.promptContentWidth = promptContentWidth; // cache for input handlers
 
-      // Word-wrap the prompt text
-      if (this.promptText.length === 0) {
-        wrappedLines.push("");
-        wrapMap.push({ textOffset: 0, length: 0 });
-      } else {
-        const rawLines = this.promptText.split("\n");
-        let textOffset = 0;
-        for (let li = 0; li < rawLines.length; li++) {
-          const rawLine = rawLines[li];
-          if (rawLine.length <= promptContentWidth) {
-            wrappedLines.push(rawLine);
-            wrapMap.push({ textOffset, length: rawLine.length });
-          } else {
-            // Word-wrap long lines
-            let pos = 0;
-            while (pos < rawLine.length) {
-              let end = pos + promptContentWidth;
-              if (end >= rawLine.length) {
-                end = rawLine.length;
-              } else {
-                // Try to break at a word boundary
-                let breakAt = end;
-                while (breakAt > pos && rawLine[breakAt] !== " ") breakAt--;
-                if (breakAt > pos) {
-                  end = breakAt + 1; // include the space at end of this line
-                }
-                // else: no word boundary found, hard break at promptContentWidth
-              }
-              const segment = rawLine.slice(pos, end);
-              wrappedLines.push(segment);
-              wrapMap.push({
-                textOffset: textOffset + pos,
-                length: segment.length,
-              });
-              pos = end;
-            }
-          }
-          textOffset += rawLine.length + 1; // +1 for \n
-        }
-      }
-
-      // Find cursor position in wrapped lines
-      let cursorWrappedLine = 0;
-      let cursorWrappedCol = 0;
-      {
-        let remaining = this.promptCursor;
-        for (let i = 0; i < wrapMap.length; i++) {
-          const { length } = wrapMap[i];
-          // Cursor is on this line if remaining fits within it
-          // (or if it's the last line)
-          if (remaining <= length || i === wrapMap.length - 1) {
-            cursorWrappedLine = i;
-            cursorWrappedCol = Math.min(remaining, length);
-            break;
-          }
-          // Account for the chars on this visual line
-          remaining -= length;
-          // If this visual line ends at a newline in the original text, consume it
-          const lineEndOffset = wrapMap[i].textOffset + length;
-          if (
-            lineEndOffset < this.promptText.length &&
-            this.promptText[lineEndOffset] === "\n"
-          ) {
-            remaining--; // consume the newline
-          }
-        }
-      }
+      const { wrappedLines, wrapMap } = this.buildPromptWrapMap(promptContentWidth);
+      const { line: cursorWrappedLine, col: cursorWrappedCol } = this.promptCursorInWrapMap(wrapMap);
 
       // Ensure scroll keeps cursor visible
       if (cursorWrappedLine < this.promptScrollOffset) {
