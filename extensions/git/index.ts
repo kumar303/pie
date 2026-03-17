@@ -235,10 +235,11 @@ class GitComponent implements Component {
   private getForkPoint(): { commit: string; name: string } | null {
     try {
       const log = execSync(
-        "git log --format=%H%d --decorate=short --decorate-refs=refs/remotes/ --first-parent",
+        "git log --format=%H%d --decorate=short --decorate-refs=refs/remotes/ --first-parent -n 1000",
         {
           encoding: "utf-8",
           timeout: 10000,
+          maxBuffer: 10 * 1024 * 1024,
           cwd: process.cwd(),
         },
       );
