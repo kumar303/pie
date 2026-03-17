@@ -1278,6 +1278,58 @@ class GitComponent implements Component {
       }
       return;
     }
+    // p = print current file path into prompt
+    if (matchesKey(data, "p")) {
+      const file = this.currentDiffFile();
+      if (!file) {
+        this.ctx.ui.notify("No file at current scroll position", "error");
+        return;
+      }
+      const prefix = this.promptText.trim() ? "\n\n" : "";
+      const insertion = prefix + file;
+      this.promptText =
+        this.promptText.slice(0, this.promptCursor) +
+        insertion +
+        this.promptText.slice(this.promptCursor);
+      this.promptCursor += insertion.length;
+      this.diffFocusPane = "prompt";
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+    // x = explain current file's changes (inserts placeholder replaced on send)
+    if (matchesKey(data, "x")) {
+      const file = this.currentDiffFile();
+      if (!file) {
+        this.ctx.ui.notify("No file at current scroll position", "error");
+        return;
+      }
+      const prefix = this.promptText.trim() ? "\n\n" : "";
+      const insertion = prefix + "Explain these changes:\n\n${__current_file_diff__}";
+      this.promptText =
+        this.promptText.slice(0, this.promptCursor) +
+        insertion +
+        this.promptText.slice(this.promptCursor);
+      this.promptCursor += insertion.length;
+      this.diffFocusPane = "prompt";
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+    // X = explain entire visible diff (inserts placeholder replaced on send)
+    if (matchesKey(data, Key.shift("x"))) {
+      const prefix = this.promptText.trim() ? "\n\n" : "";
+      const insertion = prefix + "Explain these changes:\n\n${__current_diff__}";
+      this.promptText =
+        this.promptText.slice(0, this.promptCursor) +
+        insertion +
+        this.promptText.slice(this.promptCursor);
+      this.promptCursor += insertion.length;
+      this.diffFocusPane = "prompt";
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
   }
 
   private handlePromptPaneInput(data: string): void {
@@ -1297,8 +1349,17 @@ class GitComponent implements Component {
         this.invalidate();
         this.tui.requestRender();
       } else if (this.promptText.trim()) {
-        // Send prompt to pi and clear
-        this.sendPrompt(this.promptText.trim());
+        // Replace diff placeholders before sending
+        let text = this.promptText.trim();
+        if (text.includes("${__current_file_diff__}")) {
+          const file = this.currentDiffFile();
+          const fileDiff = file ? this.getFileDiff(file) : "(no file selected)";
+          text = text.split("${__current_file_diff__}").join(fileDiff);
+        }
+        if (text.includes("${__current_diff__}")) {
+          text = text.split("${__current_diff__}").join(this.getActiveDiffText());
+        }
+        this.sendPrompt(text);
         this.promptText = "";
         this.promptCursor = 0;
         this.promptScrollOffset = 0;
@@ -1493,6 +1554,34 @@ class GitComponent implements Component {
       }
     }
     return name;
+  }
+
+  /** Get the diff lines for a specific file from the active (filtered) diff. */
+  private getFileDiff(fileName: string): string {
+    // Find the file's section in the active diff
+    let startLine = -1;
+    let endLine = this.activeDiffLines.length;
+    for (let i = 0; i < this.activeDiffFileIndex.length; i++) {
+      if (this.activeDiffFileIndex[i].name === fileName) {
+        startLine = this.activeDiffFileIndex[i].line;
+        endLine = i + 1 < this.activeDiffFileIndex.length
+          ? this.activeDiffFileIndex[i + 1].line
+          : this.activeDiffLines.length;
+        break;
+      }
+    }
+    if (startLine < 0) return "";
+    return this.activeDiffLines
+      .slice(startLine, endLine)
+      .map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""))
+      .join("\n");
+  }
+
+  /** Get the entire active (filtered) diff as plain text. */
+  private getActiveDiffText(): string {
+    return this.activeDiffLines
+      .map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""))
+      .join("\n");
   }
 
   /** Get line/col of the prompt cursor (logical lines, split by \n) */
@@ -1845,7 +1934,7 @@ class GitComponent implements Component {
       const hideWsHint = this.hideWhitespace ? "w show ws" : "w hide ws";
       const hideFileHint = this.hiddenFiles.size > 0 ? "h hide file · H unhide all" : "h hide file";
       const helpLeft = diffFocused
-        ? `d↓ u↑ · g/G top/bottom · j/k scroll · f/F next/prev file · e edit · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`
+        ? `d↓ u↑ · g/G top/bottom · j/k scroll · f/F next/prev file · e edit · p path · x explain file · X explain diff · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`
         : `editing prompt (\\+enter=newline)`;
       const helpRight = this.promptText.trim()
         ? `tab switch pane · enter send · esc back`
