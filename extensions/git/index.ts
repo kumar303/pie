@@ -110,7 +110,7 @@ function statusLabel(status: string): string {
 
 // --- UI State Machine ---
 
-type Phase = "select-files" | "enter-command" | "result" | "diff-viewer";
+type Phase = "select-files" | "enter-command" | "result" | "diff-viewer" | "branch-status";
 
 // --- Main Component ---
 
@@ -151,6 +151,8 @@ class GitComponent implements Component {
   private hideWhitespace = true;
   private hiddenFiles: Set<string> = new Set();
   private diffMode: "working" | "branch" = "working";
+  private branchFiles: { path: string; status: string }[] = [];
+  private branchBaseName = "";
 
   // Diff viewer prompt pane (split view)
   private diffFocusPane: "diff" | "prompt" = "diff";
@@ -189,6 +191,11 @@ class GitComponent implements Component {
     this.ctx = ctx;
     this.commandHistory = loadHistory();
     this.branch = this.getBranch();
+
+    if (files.length === 0) {
+      this.phase = "branch-status";
+      this.loadBranchStatus();
+    }
   }
 
   private getBranch(): string {
@@ -613,6 +620,8 @@ class GitComponent implements Component {
       this.handleResult(data);
     } else if (this.phase === "diff-viewer") {
       this.handleDiffViewer(data);
+    } else if (this.phase === "branch-status") {
+      this.handleBranchStatus(data);
     }
   }
 
@@ -695,6 +704,34 @@ class GitComponent implements Component {
     // 'b' to show branch diff (all commits compared to base branch)
     if (matchesKey(data, "b")) {
       this.openBranchDiffViewer();
+      return;
+    }
+  }
+
+  private handleBranchStatus(data: string): void {
+    if (matchesKey(data, Key.escape) || matchesKey(data, "q")) {
+      this.onDone();
+      return;
+    }
+    if (matchesKey(data, "b")) {
+      this.openBranchDiffViewer();
+      return;
+    }
+    // j/k or arrow keys to scroll
+    if (matchesKey(data, "j") || matchesKey(data, Key.down)) {
+      if (this.cursor < this.branchFiles.length - 1) {
+        this.cursor++;
+        this.invalidate();
+        this.tui.requestRender();
+      }
+      return;
+    }
+    if (matchesKey(data, "k") || matchesKey(data, Key.up)) {
+      if (this.cursor > 0) {
+        this.cursor--;
+        this.invalidate();
+        this.tui.requestRender();
+      }
       return;
     }
   }
@@ -1025,6 +1062,38 @@ class GitComponent implements Component {
     }
   }
 
+  /** Load the list of files changed on this branch compared to the fork point. */
+  /** The phase to return to when leaving a sub-view (diff-viewer, result, etc.). */
+  private get homePhase(): Phase {
+    return this.files.length === 0 ? "branch-status" : "select-files";
+  }
+
+  private loadBranchStatus(): void {
+    const forkPoint = this.getForkPoint();
+    if (!forkPoint) {
+      this.branchFiles = [];
+      this.branchBaseName = "";
+      return;
+    }
+    this.branchBaseName = forkPoint.name;
+    try {
+      const output = execSync(
+        `git diff --name-status ${forkPoint.commit}...HEAD`,
+        { encoding: "utf-8", timeout: 10000, cwd: process.cwd() },
+      );
+      this.branchFiles = output
+        .split("\n")
+        .filter((l) => l.trim())
+        .map((line) => {
+          const status = line.slice(0, 1).trim();
+          const path = line.slice(1).trim();
+          return { path, status };
+        });
+    } catch {
+      this.branchFiles = [];
+    }
+  }
+
   private openDiffViewer(): void {
     this.diffMode = "working";
     const diffOutput = this.generateWorkingDiff();
@@ -1063,7 +1132,7 @@ class GitComponent implements Component {
         this.promptCursor = 0;
         this.promptScrollOffset = 0;
         this.confirmDiscard = false;
-        this.phase = "select-files";
+        this.phase = this.homePhase;
         this.invalidate();
         this.tui.requestRender();
       } else if (matchesKey(data, "n") || matchesKey(data, Key.escape)) {
@@ -1089,7 +1158,7 @@ class GitComponent implements Component {
         this.invalidate();
         this.tui.requestRender();
       } else {
-        this.phase = "select-files";
+        this.phase = this.homePhase;
         this.invalidate();
         this.tui.requestRender();
       }
@@ -1102,7 +1171,7 @@ class GitComponent implements Component {
         this.invalidate();
         this.tui.requestRender();
       } else {
-        this.phase = "select-files";
+        this.phase = this.homePhase;
         this.invalidate();
         this.tui.requestRender();
       }
@@ -1696,7 +1765,7 @@ class GitComponent implements Component {
     this.cursor = 0;
     this.scrollOffset = 0;
     this.cmdPrefix = "";
-    this.phase = "select-files";
+    this.phase = this.homePhase;
     this.invalidate();
     this.tui.requestRender();
   }
@@ -1805,6 +1874,15 @@ class GitComponent implements Component {
       lines.push("");
       lines.push(theme.fg("dim", "─".repeat(width)));
       lines.push(theme.fg("dim", "  enter/esc continue"));
+    } else if (this.phase === "branch-status") {
+      lines.push(...this.renderBranchStatus(width));
+      lines.push(theme.fg("dim", "─".repeat(width)));
+      lines.push(
+        truncateToWidth(theme.fg(
+          "dim",
+          "  ↑↓ navigate • b branch diff • esc quit",
+        ), width),
+      );
     } else if (this.phase === "diff-viewer") {
       // Split pane: left = diff, right = prompt editor
       const dividerWidth = 1; // │ character
@@ -2011,6 +2089,59 @@ class GitComponent implements Component {
     return lines;
   }
 
+  private renderBranchStatus(width: number): string[] {
+    const lines: string[] = [];
+    const theme = this.theme;
+
+    if (this.branchFiles.length === 0) {
+      lines.push(theme.fg("muted", "  No changes on this branch"));
+      return lines;
+    }
+
+    const baseLabel = this.branchBaseName || "base";
+    lines.push(
+      theme.fg("muted", `  ${this.branchFiles.length} file(s) changed compared to ${baseLabel}:`),
+    );
+    lines.push("");
+
+    const maxVisible = Math.min(this.branchFiles.length, 20);
+
+    if (this.cursor < this.scrollOffset) {
+      this.scrollOffset = this.cursor;
+    } else if (this.cursor >= this.scrollOffset + maxVisible) {
+      this.scrollOffset = this.cursor - maxVisible + 1;
+    }
+
+    const end = Math.min(this.scrollOffset + maxVisible, this.branchFiles.length);
+
+    for (let i = this.scrollOffset; i < end; i++) {
+      const file = this.branchFiles[i];
+      const isCursor = i === this.cursor;
+      const pointer = isCursor ? "▸" : " ";
+      const statusStr = statusLabel(file.status);
+
+      let line: string;
+      if (isCursor) {
+        line =
+          theme.fg("accent", `  ${pointer} ${truncateToWidth(file.path, width - 20)} `) +
+          theme.fg("muted", `(${statusStr})`);
+      } else {
+        line =
+          theme.fg("dim", `  ${pointer} ${truncateToWidth(file.path, width - 20)} `) +
+          theme.fg("dim", `(${statusStr})`);
+      }
+      lines.push(truncateToWidth(line, width));
+    }
+
+    if (this.branchFiles.length > maxVisible) {
+      lines.push(
+        theme.fg("dim", `  ${this.scrollOffset + 1}-${end} of ${this.branchFiles.length}`),
+      );
+    }
+
+    return lines;
+  }
+
   private renderFileList(width: number): string[] {
     const lines: string[] = [];
     const maxVisible = Math.min(this.files.length, 20);
@@ -2096,10 +2227,6 @@ export default function (pi: ExtensionAPI) {
       }
 
       const files = parseGitStatus(output);
-      if (files.length === 0) {
-        ctx.ui.notify("Working tree clean — nothing to do", "info");
-        return;
-      }
 
       const promptText = await ctx.ui.custom<string | undefined>(
         (tui, theme, _kb, done) => {
