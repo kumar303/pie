@@ -1355,12 +1355,12 @@ class GitComponent implements Component {
         return;
       }
       const prefix = this.promptText.trim() ? "\n\n" : "";
-      const insertion = prefix + file;
+      const insertion = prefix + "\n\n" + file;
       this.promptText =
         this.promptText.slice(0, this.promptCursor) +
         insertion +
         this.promptText.slice(this.promptCursor);
-      this.promptCursor += insertion.length;
+      this.promptCursor += prefix.length;
       this.diffFocusPane = "prompt";
       this.invalidate();
       this.tui.requestRender();
@@ -1374,12 +1374,13 @@ class GitComponent implements Component {
         return;
       }
       const prefix = this.promptText.trim() ? "\n\n" : "";
-      const insertion = prefix + "Explain these changes:\n\n${__current_file_diff__}";
+      const preamble = prefix + "Explain these changes:";
+      const insertion = preamble + "\n\n${__current_file_diff__}";
       this.promptText =
         this.promptText.slice(0, this.promptCursor) +
         insertion +
         this.promptText.slice(this.promptCursor);
-      this.promptCursor += insertion.length;
+      this.promptCursor += preamble.length;
       this.diffFocusPane = "prompt";
       this.invalidate();
       this.tui.requestRender();
@@ -1388,12 +1389,13 @@ class GitComponent implements Component {
     // X = explain entire visible diff (inserts placeholder replaced on send)
     if (matchesKey(data, Key.shift("x"))) {
       const prefix = this.promptText.trim() ? "\n\n" : "";
-      const insertion = prefix + "Explain these changes:\n\n${__current_diff__}";
+      const preamble = prefix + "Explain these changes:";
+      const insertion = preamble + "\n\n${__current_diff__}";
       this.promptText =
         this.promptText.slice(0, this.promptCursor) +
         insertion +
         this.promptText.slice(this.promptCursor);
-      this.promptCursor += insertion.length;
+      this.promptCursor += preamble.length;
       this.diffFocusPane = "prompt";
       this.invalidate();
       this.tui.requestRender();
