@@ -1642,10 +1642,10 @@ class GitComponent implements Component {
       } else {
         lines.push(theme.fg("dim", "─".repeat(width)));
         lines.push(
-          theme.fg(
+          truncateToWidth(theme.fg(
             "dim",
             "  ↑↓ navigate • tab select • a all • u unselect • d diff • b branch diff • c commit • enter confirm • esc quit",
-          ),
+          ), width),
         );
       }
     } else if (this.phase === "enter-command") {
@@ -1657,7 +1657,7 @@ class GitComponent implements Component {
       for (const f of selectedFiles.slice(0, 5)) {
         const file = this.files.find((gf) => gf.path === f);
         const suffix = file ? ` (${statusLabel(file.status)})` : "";
-        lines.push(theme.fg("dim", `    ${f}`) + theme.fg("muted", suffix));
+        lines.push(truncateToWidth(theme.fg("dim", `    ${f}`) + theme.fg("muted", suffix), width));
       }
       if (selectedFiles.length > 5) {
         lines.push(
@@ -1672,7 +1672,7 @@ class GitComponent implements Component {
       if (this.cmdPrefix) {
         for (const prefixLine of this.cmdPrefix.split("\n")) {
           if (prefixLine) {
-            lines.push(theme.fg("dim", `  ${prefixLine}`));
+            lines.push(truncateToWidth(theme.fg("dim", `  ${prefixLine}`), width));
           }
         }
       }
@@ -1706,7 +1706,7 @@ class GitComponent implements Component {
       const resultLines = this.resultText.split("\n");
       const showLines = resultLines.slice(0, 20);
       for (const rl of showLines) {
-        lines.push(theme.fg(this.resultIsError ? "error" : "text", `  ${rl}`));
+        lines.push(truncateToWidth(theme.fg(this.resultIsError ? "error" : "text", `  ${rl}`), width));
       }
       if (resultLines.length > 20) {
         lines.push(
@@ -1851,7 +1851,7 @@ class GitComponent implements Component {
         ? `tab switch pane · enter send · esc back`
         : `tab switch pane · esc back`;
       lines.push(
-        theme.fg("dim", `  ${helpLeft}  │  ${helpRight}  ${position}`),
+        truncateToWidth(theme.fg("dim", `  ${helpLeft}  │  ${helpRight}  ${position}`), width),
       );
 
       // Confirmation dialog overlay
