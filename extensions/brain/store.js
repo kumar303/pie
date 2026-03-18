@@ -8,6 +8,9 @@ import { execSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  openSync,
+  writeSync,
+  closeSync,
   readFileSync,
   writeFileSync,
   unlinkSync,
@@ -15,58 +18,71 @@ import {
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 
-// ── Types ───────────────────────────────────────────────────────────
+// ── Types (JSDoc) ───────────────────────────────────────────────────
 
-export interface SessionEntry {
-  sessionId: string;
-  dir: string;
-  branch: string | null;
-  timestamp: number;
-  lastFocused: number;
-}
+/**
+ * @typedef {"working" | "idle"} AgentState
+ */
 
-export interface DirEntry {
-  sessionId: string;
-  dir: string;
-  branch: string | null;
-  lastFocused: number;
-  active: boolean;
-}
+/**
+ * @typedef {Object} SessionEntry
+ * @property {string} sessionId
+ * @property {string} dir
+ * @property {string | null} branch
+ * @property {number} timestamp
+ * @property {number} lastFocused
+ */
 
-export interface BrainData {
-  today: DirEntry[];
-  earlier: DirEntry[];
-}
+/**
+ * @typedef {Object} DirEntry
+ * @property {string} sessionId
+ * @property {string} dir
+ * @property {string | null} branch
+ * @property {number} lastFocused
+ * @property {boolean} active
+ */
 
-export interface StatusData {
-  state: "working" | "idle";
-  updatedAt: number;
-}
+/**
+ * @typedef {Object} BrainData
+ * @property {DirEntry[]} today
+ * @property {DirEntry[]} earlier
+ */
+
+/**
+ * @typedef {Object} StatusData
+ * @property {AgentState} state
+ * @property {number} updatedAt
+ */
 
 // ── Paths ───────────────────────────────────────────────────────────
 
-export function getDataDir(): string {
-  const dir = process.env.PI_BRAIN_DIR || join(homedir(), ".pi", "agent", "brain");
+/** @param {string} [dataDir] @returns {string} */
+export function getDataDir(dataDir) {
+  const dir = dataDir || process.env.PI_BRAIN_DIR || join(homedir(), ".pi", "agent", "brain");
   mkdirSync(join(dir, "status"), { recursive: true });
   mkdirSync(join(dir, "logs"), { recursive: true });
   return dir;
 }
 
-function sessionsPath(dataDir: string): string {
+/** @param {string} dataDir @returns {string} */
+function sessionsPath(dataDir) {
   return join(dataDir, "sessions.jsonl");
 }
 
-function statusPath(dataDir: string, sessionId: string): string {
+/** @param {string} dataDir @param {string} sessionId @returns {string} */
+function statusPath(dataDir, sessionId) {
   return join(dataDir, "status", `${sessionId}.status`);
 }
 
-function logPath(dataDir: string, sessionId: string): string {
+/** @param {string} dataDir @param {string} sessionId @returns {string} */
+function logPath(dataDir, sessionId) {
   return join(dataDir, "logs", `${sessionId}.log`);
 }
 
 // ── Git ─────────────────────────────────────────────────────────────
 
-export function getGitBranch(dir: string): string | null {
+/** @param {string} dir @returns {string | null} */
+export function getGitBranch(dir) {
   try {
     return execSync("git branch --show-current", {
       encoding: "utf-8",
@@ -81,64 +97,59 @@ export function getGitBranch(dir: string): string | null {
 
 // ── Sessions ────────────────────────────────────────────────────────
 
-export function registerSession(sessionId: string, dir: string, dataDir?: string): void {
+/** @param {string} sessionId @param {string} dir @param {string} [dataDir] */
+export function registerSession(sessionId, dir, dataDir) {
   const dd = dataDir ?? getDataDir();
   const branch = getGitBranch(dir);
   const now = Date.now();
-  const entry: SessionEntry = {
-    sessionId,
-    dir,
-    branch,
-    timestamp: now,
-    lastFocused: now,
-  };
+  /** @type {SessionEntry} */
+  const entry = { sessionId, dir, branch, timestamp: now, lastFocused: now };
   const line = JSON.stringify(entry) + "\n";
   const file = sessionsPath(dd);
   if (!existsSync(file)) {
     writeFileSync(file, line);
   } else {
-    const fd = require("node:fs").openSync(file, "a");
-    require("node:fs").writeSync(fd, line);
-    require("node:fs").closeSync(fd);
+    const fd = openSync(file, "a");
+    writeSync(fd, line);
+    closeSync(fd);
   }
 }
 
-export function recordFocus(sessionId: string, dir: string, dataDir?: string): void {
+/** @param {string} sessionId @param {string} dir @param {string} [dataDir] */
+export function recordFocus(sessionId, dir, dataDir) {
   const dd = dataDir ?? getDataDir();
   const branch = getGitBranch(dir);
   const now = Date.now();
-  const entry: SessionEntry = {
-    sessionId,
-    dir,
-    branch,
-    timestamp: now,
-    lastFocused: now,
-  };
+  /** @type {SessionEntry} */
+  const entry = { sessionId, dir, branch, timestamp: now, lastFocused: now };
   const line = JSON.stringify(entry) + "\n";
   const file = sessionsPath(dd);
   if (!existsSync(file)) {
     writeFileSync(file, line);
   } else {
-    const fd = require("node:fs").openSync(file, "a");
-    require("node:fs").writeSync(fd, line);
-    require("node:fs").closeSync(fd);
+    const fd = openSync(file, "a");
+    writeSync(fd, line);
+    closeSync(fd);
   }
 }
 
 // ── Status ──────────────────────────────────────────────────────────
 
-export function writeStatus(sessionId: string, state: "working" | "idle", dataDir?: string): void {
+/** @param {string} sessionId @param {AgentState} state @param {string} [dataDir] */
+export function writeStatus(sessionId, state, dataDir) {
   const dd = dataDir ?? getDataDir();
-  const data: StatusData = { state, updatedAt: Date.now() };
+  /** @type {StatusData} */
+  const data = { state, updatedAt: Date.now() };
   writeFileSync(statusPath(dd, sessionId), JSON.stringify(data));
 }
 
-export function readStatus(sessionId: string, dataDir?: string): StatusData | null {
+/** @param {string} sessionId @param {string} [dataDir] @returns {StatusData | null} */
+export function readStatus(sessionId, dataDir) {
   const dd = dataDir ?? getDataDir();
   const file = statusPath(dd, sessionId);
   try {
     const raw = readFileSync(file, "utf-8");
-    return JSON.parse(raw) as StatusData;
+    return JSON.parse(raw);
   } catch {
     return null;
   }
@@ -146,7 +157,8 @@ export function readStatus(sessionId: string, dataDir?: string): StatusData | nu
 
 const STALE_MS = 5 * 60 * 1000; // 5 minutes
 
-export function isSessionActive(sessionId: string, dataDir?: string, now?: number): boolean {
+/** @param {string} sessionId @param {string} [dataDir] @param {number} [now] @returns {boolean} */
+export function isSessionActive(sessionId, dataDir, now) {
   const status = readStatus(sessionId, dataDir);
   if (!status) return false;
   if (status.state !== "working") return false;
@@ -156,11 +168,13 @@ export function isSessionActive(sessionId: string, dataDir?: string, now?: numbe
 
 // ── Read sessions ───────────────────────────────────────────────────
 
-function readAllEntries(dataDir: string): SessionEntry[] {
+/** @param {string} dataDir @returns {SessionEntry[]} */
+function readAllEntries(dataDir) {
   const file = sessionsPath(dataDir);
   if (!existsSync(file)) return [];
   const raw = readFileSync(file, "utf-8");
-  const entries: SessionEntry[] = [];
+  /** @type {SessionEntry[]} */
+  const entries = [];
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     try {
@@ -172,7 +186,8 @@ function readAllEntries(dataDir: string): SessionEntry[] {
   return entries;
 }
 
-function startOfToday(): number {
+/** @returns {number} */
+function startOfToday() {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   return d.getTime();
@@ -181,7 +196,8 @@ function startOfToday(): number {
 const MAX_LIST = 50;
 const MAX_AGE_DAYS = 30;
 
-export function readSessions(dataDir?: string, now?: number): BrainData {
+/** @param {string} [dataDir] @param {number} [now] @returns {BrainData} */
+export function readSessions(dataDir, now) {
   const dd = dataDir ?? getDataDir();
   const currentTime = now ?? Date.now();
   const entries = readAllEntries(dd);
@@ -191,7 +207,8 @@ export function readSessions(dataDir?: string, now?: number): BrainData {
   const recent = entries.filter((e) => e.lastFocused >= cutoff);
 
   // Dedup by dir — latest lastFocused wins
-  const byDir = new Map<string, SessionEntry>();
+  /** @type {Map<string, SessionEntry>} */
+  const byDir = new Map();
   for (const e of recent) {
     const existing = byDir.get(e.dir);
     if (!existing || e.lastFocused > existing.lastFocused) {
@@ -200,11 +217,14 @@ export function readSessions(dataDir?: string, now?: number): BrainData {
   }
 
   const todayStart = startOfToday();
-  const today: DirEntry[] = [];
-  const earlier: DirEntry[] = [];
+  /** @type {DirEntry[]} */
+  const today = [];
+  /** @type {DirEntry[]} */
+  const earlier = [];
 
   for (const e of byDir.values()) {
-    const entry: DirEntry = {
+    /** @type {DirEntry} */
+    const entry = {
       sessionId: e.sessionId,
       dir: e.dir,
       branch: e.branch,
@@ -230,7 +250,8 @@ export function readSessions(dataDir?: string, now?: number): BrainData {
 
 // ── Filtering ───────────────────────────────────────────────────────
 
-export function filterDirs(dirs: DirEntry[], query: string): DirEntry[] {
+/** @param {DirEntry[]} dirs @param {string} query @returns {DirEntry[]} */
+export function filterDirs(dirs, query) {
   if (!query) return dirs;
   const q = query.toLowerCase();
   return dirs.filter((d) => {
@@ -245,7 +266,8 @@ export function filterDirs(dirs: DirEntry[], query: string): DirEntry[] {
 
 const MAX_LOG_LINES = 100;
 
-export function appendLog(sessionId: string, toolName: string, output: string, dataDir?: string): void {
+/** @param {string} sessionId @param {string} toolName @param {string} output @param {string} [dataDir] */
+export function appendLog(sessionId, toolName, output, dataDir) {
   const dd = dataDir ?? getDataDir();
   const file = logPath(dd, sessionId);
 
@@ -268,7 +290,8 @@ export function appendLog(sessionId: string, toolName: string, output: string, d
   writeFileSync(file, truncated.join("\n"));
 }
 
-export function readLog(sessionId: string, dataDir?: string): string[] {
+/** @param {string} sessionId @param {string} [dataDir] @returns {string[]} */
+export function readLog(sessionId, dataDir) {
   const dd = dataDir ?? getDataDir();
   const file = logPath(dd, sessionId);
   try {
@@ -281,14 +304,17 @@ export function readLog(sessionId: string, dataDir?: string): string[] {
 
 // ── Pruning ─────────────────────────────────────────────────────────
 
-export function pruneOldSessions(maxAgeDays?: number, dataDir?: string): void {
+/** @param {number} [maxAgeDays] @param {string} [dataDir] */
+export function pruneOldSessions(maxAgeDays, dataDir) {
   const dd = dataDir ?? getDataDir();
   const days = maxAgeDays ?? MAX_AGE_DAYS;
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   const entries = readAllEntries(dd);
 
-  const kept: SessionEntry[] = [];
-  const removedSessionIds = new Set<string>();
+  /** @type {SessionEntry[]} */
+  const kept = [];
+  /** @type {Set<string>} */
+  const removedSessionIds = new Set();
 
   for (const e of entries) {
     if (e.lastFocused >= cutoff) {

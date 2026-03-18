@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { BrainComponent } from "./brain.js";
 import { Key } from "@mariozechner/pi-tui";
 import type { BrainData, DirEntry } from "./store.js";
+import type { StatusMessage, ErrorMessage } from "./service.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -45,9 +46,9 @@ function fakeReadLog(sessionId: string): string[] {
 function createComponent(opts?: {
   data?: BrainData;
   readLogFn?: (sessionId: string) => string[];
+  readSessionsFn?: () => BrainData;
   onDone?: () => void;
   onOpenDir?: (dir: DirEntry) => void;
-  reloadDataFn?: () => BrainData;
   cwd?: string;
   cwdBranch?: string | null;
 }) {
@@ -58,11 +59,10 @@ function createComponent(opts?: {
   const data = opts?.data ?? makeData();
   const readLogFn = opts?.readLogFn ?? fakeReadLog;
 
-  const reloadDataFn = opts?.reloadDataFn ?? (() => data);
-
-  const component = new BrainComponent(tui, theme, onDone, onOpenDir, data, readLogFn, reloadDataFn, {
+  const component = new BrainComponent(tui, theme, onDone, onOpenDir, data, readLogFn, {
     cwd: opts?.cwd ?? "/home/user/current-project",
     cwdBranch: opts?.cwdBranch ?? "main",
+    readSessionsFn: opts?.readSessionsFn,
   });
   return { component, tui, onDone, onOpenDir, data };
 }
@@ -514,49 +514,156 @@ describe("enter opens directory", () => {
   });
 });
 
-describe("reload", () => {
-  it("r refreshes data from reloadDataFn", () => {
-    const newData: BrainData = {
-      today: [],
-      earlier: [
-        { sessionId: "s9", dir: "/home/user/new-project", branch: "main", lastFocused: 2000, active: false },
-      ],
+describe("handleStatusMessage", () => {
+  it("sets active flag when status is working", () => {
+    const { component } = createComponent();
+    const msg: StatusMessage = {
+      type: "status",
+      sessionId: "s1",
+      dir: "/home/user/alpha",
+      branch: "main",
+      state: "working",
     };
-    const reloadDataFn = vi.fn(() => newData);
-    const { component } = createComponent({ reloadDataFn });
+    component.handleStatusMessage(msg);
+    const text = renderText(component);
+    // Should show spinner for the active entry
+    const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    expect(spinnerFrames.some((f) => text.includes(f))).toBe(true);
+    component.dispose();
+  });
 
-    // Before reload, shows original data
+  it("clears active flag when status is idle", () => {
+    const { component, data } = createComponent({
+      data: {
+        today: [{ sessionId: "s1", dir: "/home/user/alpha", branch: "main", lastFocused: 1000, active: true }],
+        earlier: [],
+      },
+    });
+    component.dispose(); // Stop any existing spinner from constructor
+
+    const msg: StatusMessage = {
+      type: "status",
+      sessionId: "s1",
+      dir: "/home/user/alpha",
+      branch: "main",
+      state: "idle",
+    };
+    component.handleStatusMessage(msg);
+    expect(data.today[0].active).toBe(false);
+    component.dispose();
+  });
+
+  it("triggers re-render on status message", () => {
+    const { component, tui } = createComponent();
+    tui.requestRender.mockClear();
+
+    const msg: StatusMessage = {
+      type: "status",
+      sessionId: "s1",
+      dir: "/home/user/alpha",
+      branch: "main",
+      state: "working",
+    };
+    component.handleStatusMessage(msg);
+    expect(tui.requestRender).toHaveBeenCalled();
+    component.dispose();
+  });
+});
+
+describe("handleSessionsChanged", () => {
+  it("re-reads sessions and refreshes the list", () => {
+    const newData: BrainData = {
+      today: [
+        { sessionId: "s9", dir: "/home/user/new-project", branch: "feat", lastFocused: 2000, active: false },
+      ],
+      earlier: [],
+    };
+    const readSessionsFn = vi.fn(() => newData);
+    const { component } = createComponent({ readSessionsFn });
+
+    // Initially shows original data
     let text = renderText(component);
     expect(text).toContain("alpha");
 
-    // Press r to reload
-    component.handleInput("r");
+    // Receive sessions_changed
+    component.handleSessionsChanged();
     text = renderText(component);
-
-    expect(reloadDataFn).toHaveBeenCalled();
-    expect(text).not.toContain("alpha");
     expect(text).toContain("new-project");
+    expect(text).not.toContain("alpha");
+    expect(readSessionsFn).toHaveBeenCalled();
   });
 
-  it("r resets cursor and clears search", () => {
-    const reloadDataFn = vi.fn(() => makeData());
-    const { component } = createComponent({ reloadDataFn });
+  it("preserves search filter when sessions change", () => {
+    const newData: BrainData = {
+      today: [
+        { sessionId: "s1", dir: "/home/user/alpha", branch: "main", lastFocused: 2000, active: false },
+        { sessionId: "s9", dir: "/home/user/zeta", branch: null, lastFocused: 1000, active: false },
+      ],
+      earlier: [],
+    };
+    const readSessionsFn = vi.fn(() => newData);
+    const { component } = createComponent({ readSessionsFn });
 
-    // Move cursor down and start a search
-    component.handleInput(DOWN);
-    component.handleInput(DOWN);
+    // Enter search mode and type "alp"
     component.handleInput("/");
     component.handleInput("a");
+    component.handleInput("l");
+    component.handleInput("p");
+    component.handleInput(ENTER); // accept search
 
-    // Reload
-    component.handleInput(ESCAPE); // exit search first
-    component.handleInput("r");
-
+    component.handleSessionsChanged();
     const text = renderText(component);
-    // Cursor should be back at the first item
-    expect(text).toContain("> alpha");
-    // Search mode should not be active (no search query indicator like "/ x_")
-    expect(text).not.toMatch(/\/ \w+_/);
+    expect(text).toContain("alpha");
+    expect(text).not.toContain("zeta");
   });
 
+  it("clamps cursor when list shrinks", () => {
+    const { component } = createComponent();
+
+    // Move cursor to later item
+    component.handleInput(DOWN);
+    component.handleInput(DOWN);
+
+    const newData: BrainData = {
+      today: [{ sessionId: "s1", dir: "/home/user/only", branch: null, lastFocused: 1000, active: false }],
+      earlier: [],
+    };
+    const readSessionsFn = vi.fn(() => newData);
+    // We need to set readSessionsFn — create a new component
+    const { component: comp2 } = createComponent({ readSessionsFn });
+    comp2.handleInput(DOWN);
+    comp2.handleInput(DOWN);
+    comp2.handleSessionsChanged();
+    const text = renderText(comp2);
+    expect(text).toContain("> only");
+  });
+
+  it("is a no-op without readSessionsFn", () => {
+    const { component, tui } = createComponent();
+    tui.requestRender.mockClear();
+    // Should not throw or re-render
+    component.handleSessionsChanged();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleError", () => {
+  it("displays error notification", () => {
+    const { component } = createComponent();
+    const msg: ErrorMessage = {
+      type: "error",
+      sessionId: "s1",
+      message: "Service crashed!",
+    };
+    component.handleError(msg);
+    const text = renderText(component);
+    expect(text).toContain("Service crashed!");
+  });
+
+  it("triggers re-render", () => {
+    const { component, tui } = createComponent();
+    tui.requestRender.mockClear();
+    component.handleError({ type: "error", sessionId: "s1", message: "oops" });
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
 });

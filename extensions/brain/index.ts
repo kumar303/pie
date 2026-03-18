@@ -5,7 +5,7 @@
  * directories and their tool output logs.
  *
  * Tracks session activity (working/idle) and logs tool output for each
- * pi session directory.
+ * pi session directory. Uses a pub/sub service for instant status updates.
  */
 
 import { spawnSync } from "node:child_process";
@@ -27,6 +27,11 @@ import {
   type DirEntry,
 } from "./store.js";
 import { BrainComponent } from "./brain.js";
+import {
+  ensureService,
+  type Client,
+  type PubSubMessage,
+} from "./service.js";
 
 export default function (pi: ExtensionAPI) {
   // ── Per-session state ───────────────────────────────────────────
@@ -35,6 +40,12 @@ export default function (pi: ExtensionAPI) {
   let sessionDir: string | null = null;
   let logBuffer: { toolName: string; output: string }[] = [];
   let flushTimer: ReturnType<typeof setInterval> | null = null;
+
+  // Pub/sub client — stored as a promise so publishes can await it.
+  // Resolves to the Client on success, or null if the service failed
+  // to start (with the error stored in pubsubError).
+  let connectingClient: Promise<Client | null> | null = null;
+  let pubsubError: string | null = null;
 
   function flushLogBuffer(): void {
     if (!sessionId || logBuffer.length === 0) return;
@@ -56,6 +67,21 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  /** Publish a message via the pub/sub service (non-blocking). */
+  async function publishMessage(msg: PubSubMessage): Promise<void> {
+    if (!connectingClient) return;
+    const client = await connectingClient;
+    if (client) {
+      client.publish(msg);
+    }
+  }
+
+  /** Get the connected client, or null if unavailable. */
+  async function getClient(): Promise<Client | null> {
+    if (!connectingClient) return null;
+    return connectingClient;
+  }
+
   // ── Event listeners ─────────────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
@@ -65,25 +91,58 @@ export default function (pi: ExtensionAPI) {
     if (sessionId && sessionDir) {
       registerSession(sessionId, sessionDir);
       startFlushTimer();
+
+      // Connect to pub/sub service (non-blocking).
+      // On failure, store the error so the brain UI can display it.
+      connectingClient = ensureService({})
+        .then((client) => {
+          // Surface post-connection errors (service died, socket broken)
+          client.onError((err) => {
+            pubsubError = `Pub/sub connection lost: ${err.message}`;
+          });
+          // Publish sessions_changed so other brains refresh
+          client.publish({ type: "sessions_changed" });
+          return client;
+        })
+        .catch((err: Error) => {
+          pubsubError = `Pub/sub service failed: ${err.message}`;
+          return null;
+        });
     }
 
     // Prune old sessions in the background (non-blocking)
     try {
       pruneOldSessions();
     } catch {
-      // Ignore pruning errors
+      // Pruning is best-effort
     }
   });
 
   pi.on("agent_start", async (_event, _ctx) => {
-    if (sessionId) {
+    if (sessionId && sessionDir) {
       writeStatus(sessionId, "working");
+      const branch = getGitBranch(sessionDir);
+      publishMessage({
+        type: "status",
+        sessionId,
+        dir: sessionDir,
+        branch,
+        state: "working",
+      });
     }
   });
 
   pi.on("agent_end", async (_event, _ctx) => {
-    if (sessionId) {
+    if (sessionId && sessionDir) {
       writeStatus(sessionId, "idle");
+      const branch = getGitBranch(sessionDir);
+      publishMessage({
+        type: "status",
+        sessionId,
+        dir: sessionDir,
+        branch,
+        state: "idle",
+      });
     }
   });
 
@@ -104,8 +163,21 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, _ctx) => {
     flushLogBuffer();
     stopFlushTimer();
-    if (sessionId) {
+    if (sessionId && sessionDir) {
       writeStatus(sessionId, "idle");
+      const client = await getClient();
+      if (client) {
+        const branch = getGitBranch(sessionDir);
+        client.publish({
+          type: "status",
+          sessionId,
+          dir: sessionDir,
+          branch,
+          state: "idle",
+        });
+        client.disconnect();
+      }
+      connectingClient = null;
     }
   });
 
@@ -139,6 +211,8 @@ export default function (pi: ExtensionAPI) {
             // Record focus timestamp
             if (dir.sessionId) {
               recordFocus(dir.sessionId, dir.dir);
+              // Notify other brains
+              publishMessage({ type: "sessions_changed" });
             }
 
             // Open in $EDITOR
@@ -146,9 +220,35 @@ export default function (pi: ExtensionAPI) {
           },
           data,
           (sid: string) => readLog(sid),
-          () => readSessions(),
-          { cwd: ctx.cwd, cwdBranch: getGitBranch(ctx.cwd) },
+          {
+            cwd: ctx.cwd,
+            cwdBranch: getGitBranch(ctx.cwd),
+            readSessionsFn: () => readSessions(),
+          },
         );
+
+        // If pub/sub failed to connect, show the error immediately
+        if (pubsubError) {
+          component.handleError({
+            type: "error",
+            sessionId: sessionId ?? "",
+            message: pubsubError,
+          });
+        }
+
+        // Subscribe to pub/sub messages
+        getClient().then((client) => {
+          if (!client) return;
+          client.onMessage((msg: PubSubMessage) => {
+            if (msg.type === "status") {
+              component.handleStatusMessage(msg);
+            } else if (msg.type === "sessions_changed") {
+              component.handleSessionsChanged();
+            } else if (msg.type === "error") {
+              component.handleError(msg);
+            }
+          });
+        });
 
         return {
           render: (w: number) => component.render(w),

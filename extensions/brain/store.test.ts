@@ -231,7 +231,7 @@ describe("readSessions", () => {
     expect(all[0].dir).toBe("/tmp/new");
   });
 
-  it("shows active flag for working sessions", () => {
+  it("populates active flag from disk on startup", () => {
     const now = Date.now();
     const file = join(tmpDir, "sessions.jsonl");
     writeFileSync(file, JSON.stringify({ sessionId: "s1", dir: "/tmp/active", branch: null, timestamp: now, lastFocused: now }) + "\n");

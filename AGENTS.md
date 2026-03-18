@@ -10,6 +10,7 @@ Pi extensions repo. Do not commit changes to git automatically.
 - Update the README table when adding extensions
 - Peer deps (`@mariozechner/pi-coding-agent`, `@mariozechner/pi-tui`, `@sinclair/typebox`): use `import type`, never bundle
 - If there's a test suite for the project, add all features with TDD according to the guidelines below
+- Never swallow errors unless they are expected; report all errors in the UI of extensions.
 
 # TDD guidelines
 

@@ -14,7 +14,8 @@ import {
   visibleWidth,
   type Component,
 } from "@mariozechner/pi-tui";
-import { filterDirs, isSessionActive, type BrainData, type DirEntry } from "./store.js";
+import { filterDirs, type BrainData, type DirEntry } from "./store.js";
+import type { StatusMessage, ErrorMessage } from "./service.js";
 import { basename } from "node:path";
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -22,13 +23,15 @@ import { basename } from "node:path";
 type FocusedPanel = "dirs" | "logs";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SPINNER_INTERVAL = 100;
+const SPINNER_INTERVAL_MS = 100;
 
 // ── Component ───────────────────────────────────────────────────────
 
 export interface BrainComponentOptions {
   cwd?: string;
   cwdBranch?: string | null;
+  /** Called when sessions_changed is received to re-read session data. */
+  readSessionsFn?: () => BrainData;
 }
 
 export class BrainComponent implements Component {
@@ -37,7 +40,7 @@ export class BrainComponent implements Component {
   private onDone: () => void;
   private onOpenDir: (dir: DirEntry) => void;
   private readLogFn: (sessionId: string) => string[];
-  private reloadDataFn: () => BrainData;
+  private readSessionsFn?: () => BrainData;
   private cwd: string;
   private cwdBranch: string | null;
 
@@ -54,6 +57,7 @@ export class BrainComponent implements Component {
   private filteredEarlier: DirEntry[];
   private spinnerFrame = 0;
   private spinnerTimer: ReturnType<typeof setInterval> | null = null;
+  private errorNotification: string | null = null;
 
   // Cache
   private cachedLines?: string[];
@@ -66,7 +70,6 @@ export class BrainComponent implements Component {
     onOpenDir: (dir: DirEntry) => void,
     data: BrainData,
     readLogFn: (sessionId: string) => string[],
-    reloadDataFn: () => BrainData,
     options?: BrainComponentOptions,
   ) {
     this.tui = tui;
@@ -75,7 +78,7 @@ export class BrainComponent implements Component {
     this.onOpenDir = onOpenDir;
     this.data = data;
     this.readLogFn = readLogFn;
-    this.reloadDataFn = reloadDataFn;
+    this.readSessionsFn = options?.readSessionsFn;
     this.cwd = options?.cwd ?? process.cwd();
     this.cwdBranch = options?.cwdBranch ?? null;
     this.filteredToday = data.today;
@@ -92,28 +95,62 @@ export class BrainComponent implements Component {
     }
   }
 
-  /** Re-read status files and update the active flag on all entries. */
-  private refreshActiveFlags(): void {
+  /** Handle a status message from the pub/sub service. */
+  handleStatusMessage(msg: StatusMessage): void {
     const allDirs = [...this.data.today, ...this.data.earlier];
     for (const d of allDirs) {
-      d.active = isSessionActive(d.sessionId);
+      if (d.sessionId === msg.sessionId) {
+        d.active = msg.state === "working";
+      }
     }
+    this.maybeStartSpinner();
+    this.invalidate();
+    this.tui.requestRender();
   }
 
+  /** Handle a sessions_changed message: re-read sessions and refresh the list. */
+  handleSessionsChanged(): void {
+    if (!this.readSessionsFn) return;
+    this.data = this.readSessionsFn();
+    this.filteredToday = this.searchQuery
+      ? filterDirs(this.data.today, this.searchQuery)
+      : this.data.today;
+    this.filteredEarlier = this.searchQuery
+      ? filterDirs(this.data.earlier, this.searchQuery)
+      : this.data.earlier;
+    // Clamp cursor
+    const len = this.unifiedList.length;
+    if (this.cursor >= len) this.cursor = Math.max(0, len - 1);
+    this.refreshLog();
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
+  /** Handle an error message from the pub/sub service. */
+  handleError(msg: ErrorMessage): void {
+    this.errorNotification = msg.message;
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
+  /**
+   * Start/stop the spinner animation interval.
+   * This interval only animates — it never reads files or polls.
+   */
   private maybeStartSpinner(): void {
     const hasActive = [...this.data.today, ...this.data.earlier].some((d) => d.active);
     if (hasActive && !this.spinnerTimer) {
       this.spinnerTimer = setInterval(() => {
-        this.refreshActiveFlags();
         const stillActive = [...this.data.today, ...this.data.earlier].some((d) => d.active);
         if (!stillActive) {
           clearInterval(this.spinnerTimer!);
           this.spinnerTimer = null;
+          return;
         }
         this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
         this.invalidate();
         this.tui.requestRender();
-      }, SPINNER_INTERVAL);
+      }, SPINNER_INTERVAL_MS);
     } else if (!hasActive && this.spinnerTimer) {
       clearInterval(this.spinnerTimer);
       this.spinnerTimer = null;
@@ -160,25 +197,10 @@ export class BrainComponent implements Component {
     this.handleDirListInput(data);
   }
 
-  /** Reload all session data from disk (same as opening /brain fresh). */
-  private reload(): void {
-    this.data = this.reloadDataFn();
-    this.searchQuery = "";
-    this.searchMode = false;
-    this.filteredToday = this.data.today;
-    this.filteredEarlier = this.data.earlier;
-    this.cursor = 0;
-    this.refreshLog();
-    this.maybeStartSpinner();
-    this.invalidate();
-    this.tui.requestRender();
-  }
-
   private handleDirListInput(data: string): void {
     if (matchesKey(data, Key.escape)) { this.onDone(); return; }
     if (matchesKey(data, Key.tab)) { this.focusedPanel = "logs"; this.invalidate(); this.tui.requestRender(); return; }
     if (matchesKey(data, "/")) { this.searchMode = true; this.searchQuery = ""; this.invalidate(); this.tui.requestRender(); return; }
-    if (matchesKey(data, "r")) { this.reload(); return; }
     if (matchesKey(data, Key.enter)) {
       const dir = this.selectedDir();
       if (dir) this.onOpenDir(dir);
@@ -367,6 +389,9 @@ export class BrainComponent implements Component {
 
     // Bottom separator + legend
     lines.push(truncateToWidth(theme.fg("dim", "─".repeat(width)), width));
+    if (this.errorNotification) {
+      lines.push(truncateToWidth(theme.fg("error", " ⚠ " + this.errorNotification), width));
+    }
     lines.push(truncateToWidth(this.renderLegend(), width));
 
     this.cachedLines = lines;
@@ -404,6 +429,6 @@ export class BrainComponent implements Component {
     if (this.focusedPanel === "logs") {
       return theme.fg("dim", " ↑↓ scroll • d page down • u page up • g top • G bottom • tab back • esc quit");
     }
-    return theme.fg("dim", " ↑↓ navigate • tab logs • / search • r reload • esc quit");
+    return theme.fg("dim", " ↑↓ navigate • tab logs • / search • esc quit");
   }
 }
