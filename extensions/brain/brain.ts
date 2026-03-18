@@ -133,7 +133,7 @@ export class BrainComponent implements Component {
     } else {
       this.logLines = [];
     }
-    this.logScrollOffset = Math.max(0, this.logLines.length - 10);
+    this.logScrollOffset = this.maxLogScroll();
   }
 
   private applyFilter(): void {
@@ -174,11 +174,11 @@ export class BrainComponent implements Component {
     if (matchesKey(data, Key.escape)) { this.onDone(); return; }
     if (matchesKey(data, Key.tab)) { this.focusedPanel = "dirs"; this.invalidate(); this.tui.requestRender(); return; }
     if (matchesKey(data, Key.up)) { this.logScrollOffset = Math.max(0, this.logScrollOffset - 1); this.invalidate(); this.tui.requestRender(); return; }
-    if (matchesKey(data, Key.down)) { this.logScrollOffset = Math.min(Math.max(0, this.logLines.length - 1), this.logScrollOffset + 1); this.invalidate(); this.tui.requestRender(); return; }
-    if (matchesKey(data, "d")) { const h = Math.max(1, Math.floor(this.getLogPanelHeight() / 2)); this.logScrollOffset = Math.min(Math.max(0, this.logLines.length - 1), this.logScrollOffset + h); this.invalidate(); this.tui.requestRender(); return; }
+    if (matchesKey(data, Key.down)) { this.logScrollOffset = Math.min(this.maxLogScroll(), this.logScrollOffset + 1); this.invalidate(); this.tui.requestRender(); return; }
+    if (matchesKey(data, "d")) { const h = Math.max(1, Math.floor(this.getLogPanelHeight() / 2)); this.logScrollOffset = Math.min(this.maxLogScroll(), this.logScrollOffset + h); this.invalidate(); this.tui.requestRender(); return; }
     if (matchesKey(data, "u")) { const h = Math.max(1, Math.floor(this.getLogPanelHeight() / 2)); this.logScrollOffset = Math.max(0, this.logScrollOffset - h); this.invalidate(); this.tui.requestRender(); return; }
     if (matchesKey(data, "g")) { this.logScrollOffset = 0; this.invalidate(); this.tui.requestRender(); return; }
-    if (matchesKey(data, Key.shift("g"))) { this.logScrollOffset = Math.max(0, this.logLines.length - this.getLogPanelHeight()); this.invalidate(); this.tui.requestRender(); return; }
+    if (matchesKey(data, Key.shift("g"))) { this.logScrollOffset = this.maxLogScroll(); this.invalidate(); this.tui.requestRender(); return; }
   }
 
   private handleSearchInput(data: string): void {
@@ -235,6 +235,11 @@ export class BrainComponent implements Component {
   private lastRenderedLogPanelHeight = 10;
   private getLogPanelHeight(): number {
     return this.lastRenderedLogPanelHeight;
+  }
+
+  /** Maximum scroll offset that keeps the last log line at the bottom of the panel. */
+  private maxLogScroll(): number {
+    return Math.max(0, this.logLines.length - this.getLogPanelHeight());
   }
 
   // ── Rendering ───────────────────────────────────────────────────
@@ -308,6 +313,9 @@ export class BrainComponent implements Component {
     const totalRows = leftRows.length;
     this.lastRenderedLogPanelHeight = totalRows;
 
+    // Clamp scroll offset now that we know the real panel height
+    this.logScrollOffset = Math.min(this.logScrollOffset, this.maxLogScroll());
+
     // Header row — show cwd with branch
     const leftFocused = this.focusedPanel === "dirs";
     const logsFocused = this.focusedPanel === "logs";
@@ -331,10 +339,11 @@ export class BrainComponent implements Component {
       width,
     ));
 
-    // Content rows: left sections paired with log lines
+    // Content rows: left sections paired with log lines (bottom-aligned)
+    const logTopPadding = Math.max(0, totalRows - this.logLines.length);
     for (let i = 0; i < totalRows; i++) {
-      const logIdx = this.logScrollOffset + i;
-      const right = logIdx < this.logLines.length ? " " + this.logLines[logIdx] : "";
+      const logIdx = this.logScrollOffset + (i - logTopPadding);
+      const right = logIdx >= 0 && logIdx < this.logLines.length ? " " + this.logLines[logIdx] : "";
       lines.push(this.row(leftRows[i], right, lw, rw, width));
     }
 

@@ -365,6 +365,54 @@ describe("Panel B scroll", () => {
     expect(text).toContain("log line 49");
   });
 
+  it("shows last log line at bottom with no empty space below", () => {
+    // 8 log lines in a panel that is ~20 rows tall — last line should be at the bottom
+    const logLines = Array.from({ length: 8 }, (_, i) => `log line ${i}`);
+    const { component } = createComponent({
+      readLogFn: () => logLines,
+    });
+    const lines = component.render(80).map(stripAnsi);
+    // Find content rows between the accent border and the bottom separator
+    const borderIdx = lines.findIndex((l) => l.includes("═") || /^[─═│]+$/.test(l.replace(/[^─═│]/g, "")));
+    // Content rows start after the accent border (index 1) and end before the bottom separator
+    const sepIdx = lines.findLastIndex((l) => /^─+$/.test(l.trim()));
+    const contentRows = lines.slice(2, sepIdx);
+
+    // Extract right panel content (after the │ divider)
+    const rightContent = contentRows.map((row) => {
+      const dividerPos = row.indexOf("│");
+      return dividerPos >= 0 ? row.slice(dividerPos + 1).trim() : "";
+    });
+
+    // The last log line should be at the very last content row (no empty space after it)
+    const lastNonEmpty = rightContent.findLastIndex((r) => r.length > 0);
+    expect(lastNonEmpty).toBe(rightContent.length - 1);
+    expect(rightContent[lastNonEmpty]).toContain("log line 7");
+  });
+
+  it("does not scroll past the end of the log", () => {
+    const logLines = Array.from({ length: 8 }, (_, i) => `log line ${i}`);
+    const { component } = createComponent({
+      readLogFn: () => logLines,
+    });
+    // Focus logs panel and try to scroll down
+    component.handleInput(TAB);
+    for (let i = 0; i < 20; i++) component.handleInput(DOWN);
+
+    const lines = component.render(80).map(stripAnsi);
+    const sepIdx = lines.findLastIndex((l) => /^─+$/.test(l.trim()));
+    const contentRows = lines.slice(2, sepIdx);
+    const rightContent = contentRows.map((row) => {
+      const dividerPos = row.indexOf("│");
+      return dividerPos >= 0 ? row.slice(dividerPos + 1).trim() : "";
+    });
+
+    // Last log line should still be at the bottom
+    const lastNonEmpty = rightContent.findLastIndex((r) => r.length > 0);
+    expect(lastNonEmpty).toBe(rightContent.length - 1);
+    expect(rightContent[lastNonEmpty]).toContain("log line 7");
+  });
+
   it("d/u page down/up", () => {
     const longLog = Array.from({ length: 50 }, (_, i) => `log line ${i}`);
     const { component } = createComponent({
