@@ -1,58 +1,39 @@
 # brain
 
-Three-panel TUI for browsing recent project directories and their tool output logs. Invoke with `/brain`.
+TUI for keeping track of what I'm working on. Invoke with `/brain`.
 
-## Layout
+My own tiny little brain can't handle multi-tasking but with `pi` there's so much I want to do all the time.
+Typing `/brain` shows me all the tasks I'm waiting on and lets me navigate between them.
+Specifically, it shows the other directories where I have a `pi` session open.
+If any of are still waiting for `pi` results, it shows a spinner and streams the `pi` output.
 
-```
-┌─────────────┬─────────────────┐
-│  Today      │  Logs           │
-├─────────────┤                 │
-│  Earlier    │                 │
-└─────────────┴─────────────────┘
-│ legend                        │
-└───────────────────────────────┘
-```
-
-- **Today** — Directories active today. Git repos show branch: `acme [main]`.
-- **Earlier** — Directories from before today.
-- **Logs** — Tails the tool output log for the selected directory.
-
-Actively working directories show an animated spinner.
-
-## Keybindings
-
-### Directory panels (Today / Earlier)
-
-| Key      | Action                                   |
-| -------- | ---------------------------------------- |
-| `↑`/`↓`  | Move cursor (wraps around)               |
-| `Tab`    | Cycle focus to next panel                |
-| `Enter`  | Open selected directory in `$EDITOR`     |
-| `/`      | Enter search mode                        |
-| `Escape` | Exit `/brain`                            |
-
-### Logs panel
-
-| Key      | Action                    |
-| -------- | ------------------------- |
-| `↑`/`↓`  | Scroll one line           |
-| `d`/`u`  | Page down / up            |
-| `g`/`G`  | Scroll to top / bottom    |
-| `Tab`    | Cycle focus to next panel |
-| `Escape` | Exit `/brain`             |
-
-### Search mode
-
-Press `/` to search. Filters both Today and Earlier by directory name, path, or branch.
-
-## Storage
-
-Default location: `~/.pi/agent/brain/`. Override with `PI_BRAIN_DIR` env var.
+My `$EDITOR` is set to `code` (VS Code) and I always run `pi` in an integrated terminal.
+I'm pretty sure `/brain` will only work for you if you have a similar setup.
+It switches projects by invoking `$EDITOR` on the directory.
 
 ```
-$PI_BRAIN_DIR/
-├── sessions.jsonl              # Directory registry
-├── status/<session-id>.status  # Working/idle state
-└── logs/<session-id>.log       # Tool output (last 100 lines)
+ ▶ pie [main]                           │   Logs
+════════════════════════════════════════│─────────────────────────────────────────────────────────────
+   Today                                │    Start at  12:06:10
+     > pie [main]                       │    Duration  271ms (transform 94ms, setup 0ms, import 185...
+       other-project [example-branch]   │
+       example-directory [main]         │
+       extension-error-simulator [main] │ [bash] 2026-03-18T12:06:12.350Z
+       scratch-worktree-fix             │
+       something-else [long-branch-na...│ > test
+       ui-extensions [main]             │ > vitest run
+       scratch                          │
+                                        │
+   Earlier                              │  RUN  v4.1.0 /Users/kumar/src/github.com/kumar303/pie
+       another-directory [main]         │
+                                        │
+                                        │  Test Files  2 passed (2)
+                                        │       Tests  68 passed (68)
+                                        │    Start at  12:06:10
+                                        │    Duration  271ms (transform 94ms, setup 0ms, import 185...
+                                        │
+                                        │
+                                        │
+──────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ navigate • tab logs • / search • esc quit
 ```
