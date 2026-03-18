@@ -2,10 +2,10 @@
 
 TUI for keeping track of what I'm working on. Invoke with `/brain`.
 
-My own tiny little brain can't handle multi-tasking but with `pi` there's so much I want to do all the time.
+My own tiny little brain can't handle multi-tasking but with [`pi`](https://pi.dev/) there's so much I want to do all the time.
 Typing `/brain` shows me all the tasks I'm waiting on and lets me navigate between them.
 Specifically, it shows the other directories where I have a `pi` session open.
-If any of are still waiting for `pi` results, it shows a spinner and streams the `pi` output.
+If any are still waiting for `pi` results, it shows a spinner and streams the `pi` output.
 
 My `$EDITOR` is set to `code` (VS Code) and I always run `pi` in an integrated terminal.
 I'm pretty sure `/brain` will only work for you if you have a similar setup.
