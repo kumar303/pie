@@ -211,7 +211,7 @@ export function readSessions(dataDir?: string, now?: number): BrainData {
       lastFocused: e.lastFocused,
       active: isSessionActive(e.sessionId, dd, currentTime),
     };
-    if (e.lastFocused >= todayStart && entry.active) {
+    if (e.lastFocused >= todayStart) {
       today.push(entry);
     } else {
       earlier.push(entry);
