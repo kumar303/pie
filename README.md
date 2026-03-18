@@ -6,7 +6,7 @@ pie[xtensions, agents, skills, and stuff]
 
 My daily-use extensions for [pi](https://pi.dev), a customizable coding agent that runs in your terminal.
 
-These extensions have been incubated over time and work well for me. That said, they come with **no guarantee of support** — interfaces may change, extensions may be added or removed, and nothing here is promised to be stable.
+Yolo. Some work well, some are more experimental. They come with **no guarantee of support**.
 
 All code is licensed under [WTFPL](LICENSE).
 
@@ -14,6 +14,7 @@ All code is licensed under [WTFPL](LICENSE).
 
 | Extension                                                    | Description                                                                                                                                                                                                        |
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [brain](extensions/brain/)                                   | Three-panel TUI for browsing recent project directories and their tool output logs. Invoke with `/brain`.                                                                                                          |
 | [git](extensions/git/)                                       | Interactive git file selector and command runner. Invoke with `/git`. Navigate files, select with tab, run commands with `{}` placeholder expansion, generate commit messages with AI, view diffs in a split pane. |
 | [no-sleep-while-working](extensions/no-sleep-while-working/) | Prevents your Mac from sleeping while pi is actively working. Uses `caffeinate` under the hood.                                                                                                                    |
 
