@@ -167,7 +167,7 @@ describe("readSessions", () => {
     expect(all[0].branch).toBe("main"); // latest entry
   });
 
-  it("partitions into today and earlier", () => {
+  it("puts inactive sessions from today into earlier", () => {
     const now = Date.now();
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -179,6 +179,29 @@ describe("readSessions", () => {
     writeFileSync(file, todayEntry + "\n" + earlierEntry + "\n");
 
     const data = readSessions(tmpDir, now);
+    // s1 is inactive (no working status), so it goes to earlier even though lastFocused is today
+    expect(data.today).toHaveLength(0);
+    expect(data.earlier).toHaveLength(2);
+    // Today's inactive entry sorts first (most recently focused)
+    expect(data.earlier[0].dir).toBe("/tmp/today");
+    expect(data.earlier[1].dir).toBe("/tmp/yesterday");
+  });
+
+  it("keeps active sessions from today in today", () => {
+    const now = Date.now();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const file = join(tmpDir, "sessions.jsonl");
+    const todayEntry = JSON.stringify({ sessionId: "s1", dir: "/tmp/today", branch: null, timestamp: now, lastFocused: now });
+    const yesterdayTime = todayStart.getTime() - 1000;
+    const earlierEntry = JSON.stringify({ sessionId: "s2", dir: "/tmp/yesterday", branch: null, timestamp: yesterdayTime, lastFocused: yesterdayTime });
+    writeFileSync(file, todayEntry + "\n" + earlierEntry + "\n");
+
+    // Mark s1 as actively working
+    writeStatus("s1", "working", tmpDir);
+
+    const data = readSessions(tmpDir, now + 1000);
     expect(data.today).toHaveLength(1);
     expect(data.today[0].dir).toBe("/tmp/today");
     expect(data.earlier).toHaveLength(1);
