@@ -153,6 +153,12 @@ class GitComponent implements Component {
   private diffMode: "working" | "branch" = "working";
   private branchFiles: { path: string; status: string }[] = [];
   private branchBaseName = "";
+  private branchStatusLoading = false;
+  private showLoadingHint = false;
+  private forkPointChild: ReturnType<typeof spawn> | null = null;
+  private loadingHintTimer: ReturnType<typeof setTimeout> | null = null;
+  private cachedForkPoint: { commit: string; name: string } | null | undefined = undefined;
+  private disposed = false;
 
   // Diff viewer prompt pane (split view)
   private diffFocusPane: "diff" | "prompt" = "diff";
@@ -194,7 +200,8 @@ class GitComponent implements Component {
 
     if (files.length === 0) {
       this.phase = "branch-status";
-      this.loadBranchStatus();
+      this.branchStatusLoading = true;
+      this.loadBranchStatusAsync();
     }
   }
 
@@ -232,7 +239,32 @@ class GitComponent implements Component {
    * another branch (e.g. origin/main), which is the branching point.
    * Returns { commit, name } or null if it can't be determined.
    */
+  /** Parse git log output to find the fork point commit. */
+  private parseForkPointFromLog(log: string): { commit: string; name: string } | null {
+    const currentBranch = this.branch || "";
+    for (const line of log.split("\n")) {
+      if (!line.trim()) continue;
+      const commit = line.slice(0, 40);
+      const decoMatch = line.match(/\((.+)\)/);
+      if (!decoMatch) continue;
+      // Parse decorations like "origin/main, origin/HEAD"
+      const refs = decoMatch[1].split(",").map((r) => r.trim());
+      for (const ref of refs) {
+        // Skip the remote tracking ref for the current branch itself
+        if (currentBranch && ref === `origin/${currentBranch}`) continue;
+        // Any other remote ref means we've found the fork point
+        if (ref.startsWith("origin/")) {
+          return { commit, name: ref };
+        }
+      }
+    }
+    return null;
+  }
+
   private getForkPoint(): { commit: string; name: string } | null {
+    if (this.cachedForkPoint !== undefined) {
+      return this.cachedForkPoint;
+    }
     try {
       const log = execSync(
         "git log --format=%H%d --decorate=short --decorate-refs=refs/remotes/ --first-parent -n 1000",
@@ -243,30 +275,76 @@ class GitComponent implements Component {
           cwd: process.cwd(),
         },
       );
-      const currentBranch = this.branch || "";
-      for (const line of log.split("\n")) {
-        if (!line.trim()) continue;
-        const commit = line.slice(0, 40);
-        const decoMatch = line.match(/\((.+)\)/);
-        if (!decoMatch) continue;
-        // Parse decorations like "origin/main, origin/HEAD"
-        const refs = decoMatch[1].split(",").map((r) => r.trim());
-        for (const ref of refs) {
-          // Skip the remote tracking ref for the current branch itself
-          if (currentBranch && ref === `origin/${currentBranch}`) continue;
-          // Any other remote ref means we've found the fork point
-          if (ref.startsWith("origin/")) {
-            return { commit, name: ref };
-          }
-        }
-      }
+      const result = this.parseForkPointFromLog(log);
+      this.cachedForkPoint = result;
+      return result;
     } catch (err: any) {
       this.ctx.ui.notify(
         `git log failed: ${err.stderr?.trim() || err.message}`,
         "error",
       );
     }
+    this.cachedForkPoint = null;
     return null;
+  }
+
+  /** Non-blocking fork point detection using spawn. */
+  private getForkPointAsync(): Promise<{ commit: string; name: string } | null> {
+    if (this.cachedForkPoint !== undefined) {
+      return Promise.resolve(this.cachedForkPoint);
+    }
+
+    return new Promise((resolve) => {
+      const child = spawn("git", [
+        "log", "--format=%H%d", "--decorate=short",
+        "--decorate-refs=refs/remotes/", "--first-parent", "-n", "1000",
+      ], {
+        cwd: process.cwd(),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      this.forkPointChild = child;
+
+      let stdout = "";
+      let stderr = "";
+
+      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+
+      const killTimer = setTimeout(() => {
+        child.kill();
+        this.cachedForkPoint = null;
+        resolve(null);
+      }, 10000);
+
+      child.on("close", (code) => {
+        clearTimeout(killTimer);
+        this.forkPointChild = null;
+
+        if (code !== 0 && code !== null) {
+          if (!this.disposed) {
+            this.ctx.ui.notify(`git log failed: ${stderr.trim()}`, "error");
+          }
+          this.cachedForkPoint = null;
+          resolve(null);
+          return;
+        }
+
+        const result = this.parseForkPointFromLog(stdout);
+        this.cachedForkPoint = result;
+        resolve(result);
+      });
+
+      child.on("error", (err) => {
+        clearTimeout(killTimer);
+        this.forkPointChild = null;
+        if (!this.disposed) {
+          this.ctx.ui.notify(`git log failed: ${err.message}`, "error");
+        }
+        this.cachedForkPoint = null;
+        resolve(null);
+      });
+    });
   }
 
   private getSelectedFiles(): string[] {
@@ -711,9 +789,11 @@ class GitComponent implements Component {
 
   private handleBranchStatus(data: string): void {
     if (matchesKey(data, Key.escape) || matchesKey(data, "q")) {
+      this.cancelLoading();
       this.onDone();
       return;
     }
+    if (this.branchStatusLoading) return; // ignore other input while loading
     if (matchesKey(data, "b")) {
       this.openBranchDiffViewer();
       return;
@@ -1069,29 +1149,64 @@ class GitComponent implements Component {
     return this.files.length === 0 ? "branch-status" : "select-files";
   }
 
-  private loadBranchStatus(): void {
-    const forkPoint = this.getForkPoint();
-    if (!forkPoint) {
-      this.branchFiles = [];
-      this.branchBaseName = "";
-      return;
+  /** Load branch status asynchronously (non-blocking git log). */
+  private loadBranchStatusAsync(): void {
+    this.loadingHintTimer = setTimeout(() => {
+      if (this.disposed) return;
+      this.showLoadingHint = true;
+      this.invalidate();
+      this.tui.requestRender();
+    }, 1000);
+
+    this.getForkPointAsync().then((forkPoint) => {
+      if (this.loadingHintTimer) {
+        clearTimeout(this.loadingHintTimer);
+        this.loadingHintTimer = null;
+      }
+
+      if (this.disposed) return;
+
+      this.branchStatusLoading = false;
+      this.showLoadingHint = false;
+
+      if (!forkPoint) {
+        this.branchFiles = [];
+        this.branchBaseName = "";
+      } else {
+        this.branchBaseName = forkPoint.name;
+        try {
+          const output = execSync(
+            `git diff --name-status ${forkPoint.commit}...HEAD`,
+            { encoding: "utf-8", timeout: 10000, cwd: process.cwd() },
+          );
+          this.branchFiles = output
+            .split("\n")
+            .filter((l) => l.trim())
+            .map((line) => {
+              const status = line.slice(0, 1).trim();
+              const path = line.slice(1).trim();
+              return { path, status };
+            });
+        } catch {
+          this.branchFiles = [];
+        }
+      }
+
+      this.invalidate();
+      this.tui.requestRender();
+    });
+  }
+
+  /** Cancel any pending async loading (e.g. when user quits). */
+  private cancelLoading(): void {
+    this.disposed = true;
+    if (this.forkPointChild) {
+      this.forkPointChild.kill();
+      this.forkPointChild = null;
     }
-    this.branchBaseName = forkPoint.name;
-    try {
-      const output = execSync(
-        `git diff --name-status ${forkPoint.commit}...HEAD`,
-        { encoding: "utf-8", timeout: 10000, cwd: process.cwd() },
-      );
-      this.branchFiles = output
-        .split("\n")
-        .filter((l) => l.trim())
-        .map((line) => {
-          const status = line.slice(0, 1).trim();
-          const path = line.slice(1).trim();
-          return { path, status };
-        });
-    } catch {
-      this.branchFiles = [];
+    if (this.loadingHintTimer) {
+      clearTimeout(this.loadingHintTimer);
+      this.loadingHintTimer = null;
     }
   }
 
@@ -1883,7 +1998,9 @@ class GitComponent implements Component {
       lines.push(
         truncateToWidth(theme.fg(
           "dim",
-          "  ↑↓ navigate • b branch diff • esc quit",
+          this.branchStatusLoading
+            ? "  esc quit"
+            : "  ↑↓ navigate • b branch diff • esc quit",
         ), width),
       );
     } else if (this.phase === "diff-viewer") {
@@ -2095,6 +2212,13 @@ class GitComponent implements Component {
   private renderBranchStatus(width: number): string[] {
     const lines: string[] = [];
     const theme = this.theme;
+
+    if (this.branchStatusLoading) {
+      if (this.showLoadingHint) {
+        lines.push(theme.fg("muted", "  Loading branch status..."));
+      }
+      return lines;
+    }
 
     if (this.branchFiles.length === 0) {
       lines.push(theme.fg("muted", "  No changes on this branch"));
