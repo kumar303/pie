@@ -37,6 +37,7 @@ export class BrainComponent implements Component {
   private onDone: () => void;
   private onOpenDir: (dir: DirEntry) => void;
   private readLogFn: (sessionId: string) => string[];
+  private reloadDataFn: () => BrainData;
   private cwd: string;
   private cwdBranch: string | null;
 
@@ -65,6 +66,7 @@ export class BrainComponent implements Component {
     onOpenDir: (dir: DirEntry) => void,
     data: BrainData,
     readLogFn: (sessionId: string) => string[],
+    reloadDataFn: () => BrainData,
     options?: BrainComponentOptions,
   ) {
     this.tui = tui;
@@ -73,6 +75,7 @@ export class BrainComponent implements Component {
     this.onOpenDir = onOpenDir;
     this.data = data;
     this.readLogFn = readLogFn;
+    this.reloadDataFn = reloadDataFn;
     this.cwd = options?.cwd ?? process.cwd();
     this.cwdBranch = options?.cwdBranch ?? null;
     this.filteredToday = data.today;
@@ -157,10 +160,25 @@ export class BrainComponent implements Component {
     this.handleDirListInput(data);
   }
 
+  /** Reload all session data from disk (same as opening /brain fresh). */
+  private reload(): void {
+    this.data = this.reloadDataFn();
+    this.searchQuery = "";
+    this.searchMode = false;
+    this.filteredToday = this.data.today;
+    this.filteredEarlier = this.data.earlier;
+    this.cursor = 0;
+    this.refreshLog();
+    this.maybeStartSpinner();
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
   private handleDirListInput(data: string): void {
     if (matchesKey(data, Key.escape)) { this.onDone(); return; }
     if (matchesKey(data, Key.tab)) { this.focusedPanel = "logs"; this.invalidate(); this.tui.requestRender(); return; }
     if (matchesKey(data, "/")) { this.searchMode = true; this.searchQuery = ""; this.invalidate(); this.tui.requestRender(); return; }
+    if (matchesKey(data, "r")) { this.reload(); return; }
     if (matchesKey(data, Key.enter)) {
       const dir = this.selectedDir();
       if (dir) this.onOpenDir(dir);
@@ -386,6 +404,6 @@ export class BrainComponent implements Component {
     if (this.focusedPanel === "logs") {
       return theme.fg("dim", " ↑↓ scroll • d page down • u page up • g top • G bottom • tab back • esc quit");
     }
-    return theme.fg("dim", " ↑↓ navigate • tab logs • / search • esc quit");
+    return theme.fg("dim", " ↑↓ navigate • tab logs • / search • r reload • esc quit");
   }
 }

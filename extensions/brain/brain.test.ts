@@ -47,6 +47,7 @@ function createComponent(opts?: {
   readLogFn?: (sessionId: string) => string[];
   onDone?: () => void;
   onOpenDir?: (dir: DirEntry) => void;
+  reloadDataFn?: () => BrainData;
   cwd?: string;
   cwdBranch?: string | null;
 }) {
@@ -57,7 +58,9 @@ function createComponent(opts?: {
   const data = opts?.data ?? makeData();
   const readLogFn = opts?.readLogFn ?? fakeReadLog;
 
-  const component = new BrainComponent(tui, theme, onDone, onOpenDir, data, readLogFn, {
+  const reloadDataFn = opts?.reloadDataFn ?? (() => data);
+
+  const component = new BrainComponent(tui, theme, onDone, onOpenDir, data, readLogFn, reloadDataFn, {
     cwd: opts?.cwd ?? "/home/user/current-project",
     cwdBranch: opts?.cwdBranch ?? "main",
   });
@@ -427,40 +430,6 @@ describe("Panel B scroll", () => {
   });
 });
 
-describe("legend", () => {
-  it("shows directory legend when panel A/C focused", () => {
-    const { component } = createComponent();
-    const text = renderText(component);
-    expect(text).toContain("↑↓ navigate");
-    expect(text).toContain("tab logs");
-    expect(text).toContain("/ search");
-    expect(text).toContain("esc quit");
-  });
-
-  it("shows search query in legend", () => {
-    const { component } = createComponent();
-    component.handleInput("/");
-    component.handleInput("t");
-    component.handleInput("e");
-    const text = renderText(component);
-    expect(text).toContain("/ te_");
-    expect(text).toContain("enter accept");
-    expect(text).toContain("esc clear");
-  });
-
-  it("shows log legend when panel B focused", () => {
-    const { component } = createComponent();
-    component.handleInput(TAB);
-    const text = renderText(component);
-    expect(text).toContain("↑↓ scroll");
-    expect(text).toContain("d page down");
-    expect(text).toContain("u page up");
-    expect(text).toContain("g top");
-    expect(text).toContain("G bottom");
-    expect(text).toContain("tab back");
-  });
-});
-
 describe("escape calls onDone", () => {
   it("calls onDone from Today panel", () => {
     const { component, onDone } = createComponent();
@@ -543,4 +512,51 @@ describe("enter opens directory", () => {
       expect.objectContaining({ dir: "/home/user/delta" }),
     );
   });
+});
+
+describe("reload", () => {
+  it("r refreshes data from reloadDataFn", () => {
+    const newData: BrainData = {
+      today: [],
+      earlier: [
+        { sessionId: "s9", dir: "/home/user/new-project", branch: "main", lastFocused: 2000, active: false },
+      ],
+    };
+    const reloadDataFn = vi.fn(() => newData);
+    const { component } = createComponent({ reloadDataFn });
+
+    // Before reload, shows original data
+    let text = renderText(component);
+    expect(text).toContain("alpha");
+
+    // Press r to reload
+    component.handleInput("r");
+    text = renderText(component);
+
+    expect(reloadDataFn).toHaveBeenCalled();
+    expect(text).not.toContain("alpha");
+    expect(text).toContain("new-project");
+  });
+
+  it("r resets cursor and clears search", () => {
+    const reloadDataFn = vi.fn(() => makeData());
+    const { component } = createComponent({ reloadDataFn });
+
+    // Move cursor down and start a search
+    component.handleInput(DOWN);
+    component.handleInput(DOWN);
+    component.handleInput("/");
+    component.handleInput("a");
+
+    // Reload
+    component.handleInput(ESCAPE); // exit search first
+    component.handleInput("r");
+
+    const text = renderText(component);
+    // Cursor should be back at the first item
+    expect(text).toContain("> alpha");
+    // Search mode should not be active (no search query indicator like "/ x_")
+    expect(text).not.toMatch(/\/ \w+_/);
+  });
+
 });

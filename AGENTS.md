@@ -9,3 +9,9 @@ Pi extensions repo. Do not commit changes to git automatically.
 - Use [conventional commits](https://www.conventionalcommits.org/): `feat(git): ...`, `fix(git): ...`, `docs: ...`, `chore: ...`
 - Update the README table when adding extensions
 - Peer deps (`@mariozechner/pi-coding-agent`, `@mariozechner/pi-tui`, `@sinclair/typebox`): use `import type`, never bundle
+- If there's a test suite for the project, add all features with TDD according to the guidelines below
+
+# TDD guidelines
+
+- always write a failing test before fixing a bug or implementing a new feature
+- do not add tests for static configuration such as UI layout that is not dynamic

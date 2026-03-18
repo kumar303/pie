@@ -146,6 +146,7 @@ export default function (pi: ExtensionAPI) {
           },
           data,
           (sid: string) => readLog(sid),
+          () => readSessions(),
           { cwd: ctx.cwd, cwdBranch: getGitBranch(ctx.cwd) },
         );
 
