@@ -137,8 +137,8 @@ describe("BrainService", () => {
     receiver2.disconnect();
   });
 
-  it("stops when last client disconnects", async () => {
-    service = new BrainService(socketPath());
+  it("stops after grace period when last client disconnects", async () => {
+    service = new BrainService(socketPath(), { shutdownGraceMs: 100 });
     await service.start();
 
     const client = new Client();
@@ -146,11 +146,66 @@ describe("BrainService", () => {
     expect(service.clientCount).toBe(1);
 
     client.disconnect();
-    // Wait for the service to detect disconnection and stop
     await waitFor(() => service!.clientCount === 0);
-    // Socket file should be cleaned up
-    await waitFor(() => !existsSync(socketPath()));
+
+    // Should NOT have stopped immediately
+    expect(existsSync(socketPath())).toBe(true);
+
+    // Should stop after the grace period
+    await waitFor(() => !existsSync(socketPath()), 3000);
     service = null; // Already stopped
+  });
+
+  it("cancels shutdown if new client connects during grace period", async () => {
+    service = new BrainService(socketPath(), { shutdownGraceMs: 200 });
+    await service.start();
+
+    const client1 = new Client();
+    await client1.connect(socketPath());
+    client1.disconnect();
+    await waitFor(() => service!.clientCount === 0);
+
+    // Connect a new client during grace period
+    const client2 = new Client();
+    await client2.connect(socketPath());
+    expect(service!.clientCount).toBe(1);
+
+    // Wait past the original grace period — service should still be alive
+    await new Promise((r) => setTimeout(r, 350));
+    expect(existsSync(socketPath())).toBe(true);
+    expect(service!.clientCount).toBe(1);
+
+    client2.disconnect();
+  });
+
+  it("calling connect() multiple times on a Client does not leak server-side sockets", async () => {
+    service = new BrainService(socketPath(), { shutdownGraceMs: 100 });
+    await service.start();
+
+    // client1 stays connected the whole time
+    const client1 = new Client();
+    await client1.connect(socketPath());
+    expect(service!.clientCount).toBe(1);
+
+    // client2 connects, then reconnects (simulating ensureService retry)
+    const client2 = new Client();
+    await client2.connect(socketPath());
+    expect(service!.clientCount).toBe(2);
+
+    // Reconnect client2 — should clean up old server-side socket
+    await client2.connect(socketPath());
+    await waitFor(() => service!.clientCount === 2);
+
+    // Disconnect client2 — service should still have client1
+    client2.disconnect();
+    await waitFor(() => service!.clientCount === 1);
+
+    // Wait past grace period — service must NOT shut down
+    await new Promise((r) => setTimeout(r, 200));
+    expect(existsSync(socketPath())).toBe(true);
+    expect(service!.clientCount).toBe(1);
+
+    client1.disconnect();
   });
 
   it("handles error messages", async () => {

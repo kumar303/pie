@@ -64,6 +64,14 @@ export function getLockDir(dataDir) {
 
 // ── Service (server side) ───────────────────────────────────────────
 
+/**
+ * @typedef {Object} BrainServiceOptions
+ * @property {number} [shutdownGraceMs=5000] — ms to wait after last client
+ *   disconnects before stopping. A new connection cancels the timer.
+ */
+
+const DEFAULT_SHUTDOWN_GRACE_MS = 5000;
+
 export class BrainService {
   /** @type {import("node:net").Server} */
   #server;
@@ -71,16 +79,27 @@ export class BrainService {
   #clients = new Set();
   /** @type {string} */
   #socketPath;
+  /** @type {number} */
+  #shutdownGraceMs;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  #shutdownTimer = null;
 
-  /** @param {string} socketPath */
-  constructor(socketPath) {
+  /** @param {string} socketPath @param {BrainServiceOptions} [opts] */
+  constructor(socketPath, opts) {
     this.#socketPath = socketPath;
+    this.#shutdownGraceMs = opts?.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
     this.#server = createServer((socket) => this.#handleConnection(socket));
   }
 
   /** @param {import("node:net").Socket} socket */
   #handleConnection(socket) {
     this.#clients.add(socket);
+
+    // New client arrived — cancel any pending shutdown
+    if (this.#shutdownTimer) {
+      clearTimeout(this.#shutdownTimer);
+      this.#shutdownTimer = null;
+    }
 
     let buffer = "";
     socket.on("data", (data) => {
@@ -98,13 +117,24 @@ export class BrainService {
     socket.on("close", () => {
       this.#clients.delete(socket);
       if (this.#clients.size === 0) {
-        this.stop();
+        this.#scheduleShutdown();
       }
     });
 
     socket.on("error", () => {
       this.#clients.delete(socket);
     });
+  }
+
+  /** Schedule a shutdown after the grace period. Cancelled if a new client connects. */
+  #scheduleShutdown() {
+    if (this.#shutdownTimer) return;
+    this.#shutdownTimer = setTimeout(() => {
+      if (this.#clients.size === 0) {
+        this.stop();
+      }
+      this.#shutdownTimer = null;
+    }, this.#shutdownGraceMs);
   }
 
   /**
@@ -168,14 +198,20 @@ export class Client {
 
   /** @param {string} socketPath @returns {Promise<void>} */
   connect(socketPath) {
+    // Clean up any previous socket so the server doesn't leak a client
+    if (this.#socket) {
+      this.#socket.destroy();
+      this.#socket = null;
+    }
+
     return new Promise((resolve, reject) => {
       const socket = createConnection(socketPath, () => {
         this.#socket = socket;
         resolve();
       });
       socket.on("error", (err) => {
-        if (!this.#socket) {
-          // Pre-connection error — reject the connect promise
+        if (!this.#socket || this.#socket !== socket) {
+          // Pre-connection error or stale socket — reject the connect promise
           reject(err);
         } else {
           // Post-connection error — notify error listeners

@@ -5,7 +5,8 @@
  * Usage: node service-main.js <dataDir>
  *
  * Listens on a Unix domain socket and brokers pub/sub messages
- * between brain extension clients. Exits when the last client disconnects.
+ * between brain extension clients. Exits after a grace period
+ * once all clients have disconnected.
  *
  * Self-contained: no imports from the extension so it runs with bare node.
  */
@@ -13,6 +14,8 @@
 const net = require("node:net");
 const fs = require("node:fs");
 const path = require("node:path");
+
+const SHUTDOWN_GRACE_MS = 5000;
 
 const dataDir = process.argv[2];
 if (!dataDir) {
@@ -25,8 +28,17 @@ const socketPath = path.join(dataDir, "service.sock");
 /** @type {Set<net.Socket>} */
 const clients = new Set();
 
+/** @type {ReturnType<typeof setTimeout> | null} */
+let shutdownTimer = null;
+
 const server = net.createServer((socket) => {
   clients.add(socket);
+
+  // New client arrived — cancel any pending shutdown
+  if (shutdownTimer) {
+    clearTimeout(shutdownTimer);
+    shutdownTimer = null;
+  }
 
   let buffer = "";
   socket.on("data", (data) => {
@@ -53,7 +65,7 @@ const server = net.createServer((socket) => {
   socket.on("close", () => {
     clients.delete(socket);
     if (clients.size === 0) {
-      shutdown();
+      scheduleShutdown();
     }
   });
 
@@ -62,7 +74,21 @@ const server = net.createServer((socket) => {
   });
 });
 
+function scheduleShutdown() {
+  if (shutdownTimer) return;
+  shutdownTimer = setTimeout(() => {
+    if (clients.size === 0) {
+      shutdown();
+    }
+    shutdownTimer = null;
+  }, SHUTDOWN_GRACE_MS);
+}
+
 function shutdown() {
+  if (shutdownTimer) {
+    clearTimeout(shutdownTimer);
+    shutdownTimer = null;
+  }
   for (const client of clients) {
     client.destroy();
   }
