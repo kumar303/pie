@@ -1248,9 +1248,7 @@ class GitComponent implements Component {
         this.promptCursor = 0;
         this.promptScrollOffset = 0;
         this.confirmDiscard = false;
-        this.phase = this.homePhase;
-        this.invalidate();
-        this.tui.requestRender();
+        this.onDone();
       } else if (matchesKey(data, "n") || matchesKey(data, Key.escape)) {
         this.confirmDiscard = false;
         this.invalidate();
@@ -1267,16 +1265,14 @@ class GitComponent implements Component {
       return;
     }
 
-    // Escape: go back (with confirmation if prompt has text)
+    // Escape: exit extension (with confirmation if prompt has text)
     if (matchesKey(data, Key.escape)) {
       if (this.promptText.trim()) {
         this.confirmDiscard = true;
         this.invalidate();
         this.tui.requestRender();
       } else {
-        this.phase = this.homePhase;
-        this.invalidate();
-        this.tui.requestRender();
+        this.onDone();
       }
       return;
     }
@@ -1287,9 +1283,7 @@ class GitComponent implements Component {
         this.invalidate();
         this.tui.requestRender();
       } else {
-        this.phase = this.homePhase;
-        this.invalidate();
-        this.tui.requestRender();
+        this.onDone();
       }
       return;
     }
