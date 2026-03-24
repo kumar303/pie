@@ -382,57 +382,66 @@ class GitComponent implements Component {
 
     // Gather diff for tracked files and content for untracked (selected) files
     let diffParts: string[] = [];
-    try {
-      // Staged + unstaged diff for tracked selected files
-      const trackedFiles = selectedFiles.filter((f) => {
-        const file = this.files.find((gf) => gf.path === f);
-        return file && file.status !== "??";
-      });
-      const untrackedFiles = selectedFiles.filter((f) => {
-        const file = this.files.find((gf) => gf.path === f);
-        return file && file.status === "??";
-      });
+    const diffErrors: string[] = [];
 
-      if (trackedFiles.length > 0) {
-        const quotedTracked = trackedFiles
-          .map((f) => `"${f.replace(/"/g, '\\"')}"`)
-          .join(" ");
-        // Get both staged and unstaged diffs
-        try {
-          const staged = execSync(`git diff --cached -- ${quotedTracked}`, {
-            encoding: "utf-8",
-            timeout: 10000,
-            cwd: process.cwd(),
-          }).trim();
-          if (staged) diffParts.push(staged);
-        } catch {}
-        try {
-          const unstaged = execSync(`git diff -- ${quotedTracked}`, {
-            encoding: "utf-8",
-            timeout: 10000,
-            cwd: process.cwd(),
-          }).trim();
-          if (unstaged) diffParts.push(unstaged);
-        } catch {}
-      }
+    // Staged + unstaged diff for tracked selected files
+    const trackedFiles = selectedFiles.filter((f) => {
+      const file = this.files.find((gf) => gf.path === f);
+      return file && file.status !== "??";
+    });
+    const untrackedFiles = selectedFiles.filter((f) => {
+      const file = this.files.find((gf) => gf.path === f);
+      return file && file.status === "??";
+    });
 
-      // For untracked files, show their content as a pseudo-diff
-      for (const f of untrackedFiles) {
-        try {
-          const content = readFileSync(f, "utf-8");
-          const lines = content
-            .split("\n")
-            .map((l) => `+${l}`)
-            .join("\n");
-          diffParts.push(
-            `diff --git a/${f} b/${f}\nnew file\n--- /dev/null\n+++ b/${f}\n${lines}`,
-          );
-        } catch {}
+    if (trackedFiles.length > 0) {
+      const quotedTracked = trackedFiles
+        .map((f) => `"${f.replace(/"/g, '\\"')}"`)
+        .join(" ");
+      // Get both staged and unstaged diffs
+      try {
+        const staged = execSync(`git diff --cached -- ${quotedTracked}`, {
+          encoding: "utf-8",
+          timeout: 10000,
+          cwd: process.cwd(),
+        }).trim();
+        if (staged) diffParts.push(staged);
+      } catch (err: any) {
+        diffErrors.push(`git diff --cached failed: ${err.stderr?.trim() || err.message}`);
       }
-    } catch {}
+      try {
+        const unstaged = execSync(`git diff -- ${quotedTracked}`, {
+          encoding: "utf-8",
+          timeout: 10000,
+          cwd: process.cwd(),
+        }).trim();
+        if (unstaged) diffParts.push(unstaged);
+      } catch (err: any) {
+        diffErrors.push(`git diff failed: ${err.stderr?.trim() || err.message}`);
+      }
+    }
+
+    // For untracked files, show their content as a pseudo-diff
+    for (const f of untrackedFiles) {
+      try {
+        const content = readFileSync(f, "utf-8");
+        const lines = content
+          .split("\n")
+          .map((l) => `+${l}`)
+          .join("\n");
+        diffParts.push(
+          `diff --git a/${f} b/${f}\nnew file\n--- /dev/null\n+++ b/${f}\n${lines}`,
+        );
+      } catch (err: any) {
+        diffErrors.push(`Failed to read ${f}: ${err.message}`);
+      }
+    }
 
     if (diffParts.length === 0) {
-      this.ctx.ui.notify("No diff found for selected files", "error");
+      const detail = diffErrors.length > 0
+        ? `No diff found for selected files (${diffErrors.join("; ")})`
+        : `No diff found for ${selectedFiles.length} selected file(s)`;
+      this.ctx.ui.notify(detail, "error");
       return;
     }
 
