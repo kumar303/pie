@@ -568,6 +568,49 @@ describe("handleStatusMessage", () => {
     expect(tui.requestRender).toHaveBeenCalled();
     component.dispose();
   });
+
+  it("updates branch from status message", () => {
+    const { component } = createComponent({ cwdBranch: "develop" });
+    // Initially alpha has branch "main" (from makeDirs)
+    let text = renderText(component);
+    expect(text).toContain("alpha [main]");
+
+    // Simulate a status update where the branch changed
+    const msg: StatusMessage = {
+      type: "status",
+      sessionId: "s1",
+      dir: "/home/user/alpha",
+      branch: "feat/new-branch",
+      state: "working",
+    };
+    component.handleStatusMessage(msg);
+    text = renderText(component);
+    expect(text).toContain("alpha [feat/new-branch]");
+    expect(text).not.toContain("alpha [main]");
+    component.dispose();
+  });
+
+  it("clears branch display when status message has null branch", () => {
+    const { component } = createComponent();
+    let text = renderText(component);
+    expect(text).toContain("alpha [main]");
+
+    const msg: StatusMessage = {
+      type: "status",
+      sessionId: "s1",
+      dir: "/home/user/alpha",
+      branch: null,
+      state: "idle",
+    };
+    component.handleStatusMessage(msg);
+    text = renderText(component);
+    // alpha should no longer show [main]
+    const lines = component.render(80).map(stripAnsi);
+    const alphaLine = lines.find((l) => l.includes("alpha"));
+    expect(alphaLine).toBeDefined();
+    expect(alphaLine).not.toContain("[main]");
+    component.dispose();
+  });
 });
 
 describe("handleSessionsChanged", () => {

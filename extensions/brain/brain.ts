@@ -101,6 +101,7 @@ export class BrainComponent implements Component {
     for (const d of allDirs) {
       if (d.sessionId === msg.sessionId) {
         d.active = msg.state === "working";
+        d.branch = msg.branch;
       }
     }
     this.maybeStartSpinner();
