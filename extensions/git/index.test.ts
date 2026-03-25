@@ -64,6 +64,50 @@ describe("parseGitStatus", () => {
   });
 });
 
+// --- Test tab sanitization in diff rendering ---
+// Diff output from git can contain tab characters from source files.
+// visibleWidth counts tabs as 1 column but the terminal renders them
+// at 8-column tabstops, causing lines to overflow. Tabs must be
+// replaced with spaces before rendering.
+
+/** Mirrors the sanitizeLine method in GitComponent */
+function sanitizeLine(line: string): string {
+  return line.replace(/\t/g, "  ");
+}
+
+describe("diff line tab sanitization", () => {
+  it("replaces tab characters with spaces", () => {
+    const line = "\t\tconst x = 1;";
+    const result = sanitizeLine(line);
+    expect(result).not.toContain("\t");
+    expect(result).toBe("    const x = 1;");
+  });
+
+  it("preserves lines without tabs", () => {
+    const line = "  no tabs here";
+    expect(sanitizeLine(line)).toBe(line);
+  });
+
+  it("handles mixed tabs and spaces", () => {
+    const line = "\t  \treturn;";
+    const result = sanitizeLine(line);
+    expect(result).not.toContain("\t");
+    expect(result).toBe("      return;");
+  });
+
+  it("handles empty string", () => {
+    expect(sanitizeLine("")).toBe("");
+  });
+
+  it("preserves ANSI codes while replacing tabs", () => {
+    const line = "\x1b[32m+\t\tconst x = 1;\x1b[m";
+    const result = sanitizeLine(line);
+    expect(result).not.toContain("\t");
+    expect(result).toContain("\x1b[32m");
+    expect(result).toBe("\x1b[32m+    const x = 1;\x1b[m");
+  });
+});
+
 // --- Test the key matching behavior we're fixing ---
 // This verifies that our fix for uppercase 'A' correctly handles
 // the select-all toggle logic.

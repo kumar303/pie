@@ -1985,7 +1985,7 @@ class GitComponent implements Component {
       const resultLines = this.resultText.split("\n");
       const showLines = resultLines.slice(0, 20);
       for (const rl of showLines) {
-        lines.push(truncateToWidth(theme.fg(this.resultIsError ? "error" : "text", `  ${rl}`), width));
+        lines.push(truncateToWidth(theme.fg(this.resultIsError ? "error" : "text", `  ${this.sanitizeLine(rl)}`), width));
       }
       if (resultLines.length > 20) {
         lines.push(
@@ -2050,7 +2050,7 @@ class GitComponent implements Component {
       const diffEnd = Math.min(this.diffScrollOffset + availableLines, total);
       const leftLines: string[] = [];
       for (let i = this.diffScrollOffset; i < diffEnd; i++) {
-        leftLines.push(truncateToWidth(" " + this.activeDiffLines[i], diffPaneWidth));
+        leftLines.push(truncateToWidth(" " + this.sanitizeLine(this.activeDiffLines[i]), diffPaneWidth));
       }
       // Pad diff pane
       for (let i = leftLines.length; i < availableLines; i++) {
@@ -2199,6 +2199,11 @@ class GitComponent implements Component {
     );
 
     return prompt + before + cursorChar + after + padding;
+  }
+
+  /** Replace tab characters with spaces to prevent terminal width miscounting. */
+  private sanitizeLine(line: string): string {
+    return line.replace(/\t/g, "  ");
   }
 
   private wrapText(text: string, maxWidth: number): string[] {
