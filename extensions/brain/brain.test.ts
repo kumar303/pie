@@ -337,6 +337,27 @@ describe("search", () => {
   });
 });
 
+describe("log content with tabs", () => {
+  it("lines do not exceed width when log lines contain tab characters", () => {
+    const logWithTabs = [
+      "\t\t\tconst x = 1;",
+      "\t\tif (true) {",
+      "\t\t\t\treturn x;",
+      "\t}",
+    ];
+    const { component } = createComponent({
+      readLogFn: () => logWithTabs,
+    });
+    const width = 80;
+    const lines = component.render(width).map(stripAnsi);
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(width);
+      // Ensure no tab characters remain in rendered output
+      expect(line).not.toContain("\t");
+    }
+  });
+});
+
 describe("Panel B scroll", () => {
   it("scrolls up and down with arrow keys", () => {
     const longLog = Array.from({ length: 50 }, (_, i) => `log line ${i}`);

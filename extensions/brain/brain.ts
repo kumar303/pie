@@ -285,6 +285,11 @@ export class BrainComponent implements Component {
 
   // ── Rendering ───────────────────────────────────────────────────
 
+  /** Replace tab characters with spaces to prevent terminal width miscounting. */
+  private sanitizeLine(line: string): string {
+    return line.replace(/\t/g, "  ");
+  }
+
   private padTo(str: string, w: number): string {
     const vis = visibleWidth(str);
     if (vis >= w) return truncateToWidth(str, w);
@@ -384,7 +389,7 @@ export class BrainComponent implements Component {
     const logTopPadding = Math.max(0, totalRows - this.logLines.length);
     for (let i = 0; i < totalRows; i++) {
       const logIdx = this.logScrollOffset + (i - logTopPadding);
-      const right = logIdx >= 0 && logIdx < this.logLines.length ? " " + this.logLines[logIdx] : "";
+      const right = logIdx >= 0 && logIdx < this.logLines.length ? " " + this.sanitizeLine(this.logLines[logIdx]) : "";
       lines.push(this.row(leftRows[i], right, lw, rw, width));
     }
 
