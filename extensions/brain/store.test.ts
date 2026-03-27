@@ -185,11 +185,11 @@ describe("readSessions", () => {
     expect(data.earlier[0].dir).toBe("/tmp/yesterday");
   });
 
-  it("caps each list at 50 entries", () => {
+  it("caps each list at 100 entries", () => {
     const now = Date.now();
     const file = join(tmpDir, "sessions.jsonl");
     let content = "";
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 110; i++) {
       content += JSON.stringify({
         sessionId: `s${i}`,
         dir: `/tmp/project-${i}`,
@@ -201,7 +201,7 @@ describe("readSessions", () => {
     writeFileSync(file, content);
 
     const data = readSessions(tmpDir, now);
-    expect(data.today.length).toBeLessThanOrEqual(50);
+    expect(data.today.length).toBeLessThanOrEqual(100);
   });
 
   it("sorts by most recently focused first", () => {
@@ -217,9 +217,9 @@ describe("readSessions", () => {
     expect(all[1].dir).toBe("/tmp/a");
   });
 
-  it("prunes entries older than 30 days", () => {
+  it("prunes entries older than 60 days", () => {
     const now = Date.now();
-    const oldTime = now - 31 * 24 * 60 * 60 * 1000;
+    const oldTime = now - 61 * 24 * 60 * 60 * 1000;
     const file = join(tmpDir, "sessions.jsonl");
     const e1 = JSON.stringify({ sessionId: "s1", dir: "/tmp/old", branch: null, timestamp: oldTime, lastFocused: oldTime });
     const e2 = JSON.stringify({ sessionId: "s2", dir: "/tmp/new", branch: null, timestamp: now, lastFocused: now });

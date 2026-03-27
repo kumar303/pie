@@ -193,8 +193,8 @@ function startOfToday() {
   return d.getTime();
 }
 
-const MAX_LIST = 50;
-const MAX_AGE_DAYS = 30;
+const MAX_LIST = 100;
+const MAX_AGE_DAYS = 60;
 
 /** @param {string} [dataDir] @param {number} [now] @returns {BrainData} */
 export function readSessions(dataDir, now) {
@@ -202,7 +202,7 @@ export function readSessions(dataDir, now) {
   const currentTime = now ?? Date.now();
   const entries = readAllEntries(dd);
 
-  // Prune entries older than 30 days
+  // Prune entries older than 60 days
   const cutoff = currentTime - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
   const recent = entries.filter((e) => e.lastFocused >= cutoff);
 
