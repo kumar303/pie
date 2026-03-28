@@ -14,7 +14,7 @@
  */
 
 import { execSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import type {
@@ -108,44 +108,25 @@ function statusLabel(status: string): string {
   }
 }
 
-// --- Untracked file expansion ---
+// --- Untracked file resolution ---
 
 /**
- * Recursively walk a directory, collecting all file paths.
+ * Get all untracked files using git, respecting .gitignore.
+ * Uses `git ls-files --others --exclude-standard` which is fast
+ * (skips ignored directories like node_modules/) and returns
+ * individual file paths even for untracked directories.
  */
-function walkDirectory(dir: string, results: string[]): void {
+function getUntrackedFiles(): string[] {
   try {
-    const entries = readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walkDirectory(fullPath, results);
-      } else if (entry.isFile()) {
-        results.push(fullPath);
-      }
-    }
-  } catch {}
-}
-
-/**
- * Expand untracked paths into individual file paths.
- * git status --porcelain shows untracked directories as a single entry
- * (e.g. "?? dirname/"). This walks directories recursively to resolve
- * individual files for diff generation.
- */
-function expandUntrackedFiles(paths: string[]): string[] {
-  const result: string[] = [];
-  for (const p of paths) {
-    try {
-      const stat = statSync(p);
-      if (stat.isDirectory()) {
-        walkDirectory(p, result);
-      } else if (stat.isFile()) {
-        result.push(p);
-      }
-    } catch {}
+    const output = execSync("git ls-files --others --exclude-standard", {
+      encoding: "utf-8",
+      timeout: 10000,
+      cwd: process.cwd(),
+    });
+    return output.split("\n").filter((l) => l.trim());
+  } catch {
+    return [];
   }
-  return result;
 }
 
 // --- UI State Machine ---
@@ -429,11 +410,15 @@ class GitComponent implements Component {
       const file = this.files.find((gf) => gf.path === f);
       return file && file.status !== "??";
     });
-    const untrackedPaths = selectedFiles.filter((f) => {
+    const untrackedSelectedPaths = selectedFiles.filter((f) => {
       const file = this.files.find((gf) => gf.path === f);
       return file && file.status === "??";
     });
-    const untrackedFiles = expandUntrackedFiles(untrackedPaths);
+    // Resolve selected untracked paths (which may be directories) to individual files
+    const allUntracked = getUntrackedFiles();
+    const untrackedFiles = allUntracked.filter((f) =>
+      untrackedSelectedPaths.some((sel) => f === sel || f.startsWith(sel)),
+    );
 
     if (trackedFiles.length > 0) {
       const quotedTracked = trackedFiles
@@ -1143,11 +1128,8 @@ class GitComponent implements Component {
       if (unstaged) diffOutput += (diffOutput ? "\n" : "") + unstaged;
     } catch {}
 
-    // Include untracked files as pseudo-diffs (expand directories)
-    const untrackedPaths = this.files
-      .filter((f) => f.status === "??")
-      .map((f) => f.path);
-    const untrackedFiles = expandUntrackedFiles(untrackedPaths);
+    // Include untracked files as pseudo-diffs
+    const untrackedFiles = getUntrackedFiles();
 
     for (const f of untrackedFiles) {
       try {

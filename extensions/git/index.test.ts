@@ -230,108 +230,82 @@ describe("diff gathering file categorization", () => {
 // (e.g. "?? dirname/"). expandUntrackedFiles walks directories recursively
 // to resolve individual file paths for diff generation.
 
-// Mirrors expandUntrackedFiles + walkDirectory from index.ts.
-import { readdirSync, statSync } from "node:fs";
+// Mirrors getUntrackedFiles from index.ts.
+import { execSync } from "node:child_process";
 
-function walkDirectory(dir: string, results: string[]): void {
+function getUntrackedFiles(): string[] {
   try {
-    const entries = readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walkDirectory(fullPath, results);
-      } else if (entry.isFile()) {
-        results.push(fullPath);
-      }
-    }
-  } catch {}
-}
-
-function expandUntrackedFiles(paths: string[]): string[] {
-  const result: string[] = [];
-  for (const p of paths) {
-    try {
-      const stat = statSync(p);
-      if (stat.isDirectory()) {
-        walkDirectory(p, result);
-      } else if (stat.isFile()) {
-        result.push(p);
-      }
-    } catch {}
+    const output = execSync("git ls-files --others --exclude-standard", {
+      encoding: "utf-8",
+      timeout: 10000,
+      cwd: process.cwd(),
+    });
+    return output.split("\n").filter((l) => l.trim());
+  } catch {
+    return [];
   }
-  return result;
 }
 
-describe("expandUntrackedFiles", () => {
+describe("getUntrackedFiles", () => {
   let tmpDir: string;
+  let origCwd: string;
 
   beforeEach(() => {
+    origCwd = process.cwd();
     tmpDir = mkdtempSync(join(tmpdir(), "git-test-"));
+    execSync("git init", { cwd: tmpDir });
+    execSync("git config user.email test@test.com", { cwd: tmpDir });
+    execSync("git config user.name Test", { cwd: tmpDir });
+    // Create an initial commit so git status works properly
+    writeFileSync(join(tmpDir, ".gitkeep"), "");
+    execSync("git add . && git commit -m init", { cwd: tmpDir });
+    process.chdir(tmpDir);
   });
 
   afterEach(() => {
+    process.chdir(origCwd);
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("expands a directory into individual file paths", () => {
+  it("lists individual untracked files", () => {
+    writeFileSync(join(tmpDir, "newfile.txt"), "hello");
+
+    const result = getUntrackedFiles();
+    expect(result).toEqual(["newfile.txt"]);
+  });
+
+  it("expands untracked directories into individual files", () => {
     const subDir = join(tmpDir, "myext");
     mkdirSync(subDir);
     writeFileSync(join(subDir, "index.ts"), "export default {}");
     writeFileSync(join(subDir, "README.md"), "# My Ext");
 
-    const result = expandUntrackedFiles([subDir]);
-    expect(result.sort()).toEqual([
-      join(subDir, "README.md"),
-      join(subDir, "index.ts"),
-    ]);
+    const result = getUntrackedFiles();
+    expect(result.sort()).toEqual(["myext/README.md", "myext/index.ts"]);
   });
 
-  it("passes through individual file paths unchanged", () => {
-    const file = join(tmpDir, "single.txt");
-    writeFileSync(file, "content");
+  it("respects .gitignore", () => {
+    writeFileSync(join(tmpDir, ".gitignore"), "node_modules/\n");
+    mkdirSync(join(tmpDir, "node_modules", "some-pkg"), { recursive: true });
+    writeFileSync(join(tmpDir, "node_modules", "some-pkg", "index.js"), "module.exports = {}");
+    writeFileSync(join(tmpDir, "real-file.txt"), "keep me");
 
-    const result = expandUntrackedFiles([file]);
-    expect(result).toEqual([file]);
+    const result = getUntrackedFiles();
+    expect(result.sort()).toEqual([".gitignore", "real-file.txt"]);
   });
 
-  it("handles nested directories recursively", () => {
+  it("handles nested directories", () => {
     const nested = join(tmpDir, "a", "b", "c");
     mkdirSync(nested, { recursive: true });
-    writeFileSync(join(nested, "deep.txt"), "deep content");
-    writeFileSync(join(tmpDir, "a", "top.txt"), "top content");
+    writeFileSync(join(nested, "deep.txt"), "deep");
+    writeFileSync(join(tmpDir, "a", "top.txt"), "top");
 
-    const result = expandUntrackedFiles([join(tmpDir, "a")]);
-    expect(result.sort()).toEqual([
-      join(nested, "deep.txt"),
-      join(tmpDir, "a", "top.txt"),
-    ]);
+    const result = getUntrackedFiles();
+    expect(result.sort()).toEqual(["a/b/c/deep.txt", "a/top.txt"]);
   });
 
-  it("handles mixed files and directories", () => {
-    const dir = join(tmpDir, "dir");
-    mkdirSync(dir);
-    writeFileSync(join(dir, "inside.txt"), "inside");
-    const file = join(tmpDir, "outside.txt");
-    writeFileSync(file, "outside");
-
-    const result = expandUntrackedFiles([dir, file]);
-    expect(result.sort()).toEqual([
-      join(dir, "inside.txt"),
-      file,
-    ].sort());
-  });
-
-  it("skips nonexistent paths", () => {
-    const result = expandUntrackedFiles([join(tmpDir, "nope")]);
+  it("returns empty array when no untracked files", () => {
+    const result = getUntrackedFiles();
     expect(result).toEqual([]);
-  });
-
-  it("handles directory path with trailing slash", () => {
-    const dir = join(tmpDir, "mydir");
-    mkdirSync(dir);
-    writeFileSync(join(dir, "file.txt"), "content");
-
-    const result = expandUntrackedFiles([dir + "/"]);
-    expect(result).toEqual([join(dir, "file.txt")]);
   });
 });
