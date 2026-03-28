@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 // We need to test the parseGitStatus function and the diff-gathering logic.
 // Since parseGitStatus is not exported, we'll test it indirectly through
@@ -219,5 +222,116 @@ describe("diff gathering file categorization", () => {
 
     expect(trackedFiles).toEqual(["changed.txt"]);
     expect(untrackedFiles).toEqual(["new.txt"]);
+  });
+});
+
+// --- Test expandUntrackedFiles ---
+// git status --porcelain shows untracked directories as a single entry
+// (e.g. "?? dirname/"). expandUntrackedFiles walks directories recursively
+// to resolve individual file paths for diff generation.
+
+// Mirrors expandUntrackedFiles + walkDirectory from index.ts.
+import { readdirSync, statSync } from "node:fs";
+
+function walkDirectory(dir: string, results: string[]): void {
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walkDirectory(fullPath, results);
+      } else if (entry.isFile()) {
+        results.push(fullPath);
+      }
+    }
+  } catch {}
+}
+
+function expandUntrackedFiles(paths: string[]): string[] {
+  const result: string[] = [];
+  for (const p of paths) {
+    try {
+      const stat = statSync(p);
+      if (stat.isDirectory()) {
+        walkDirectory(p, result);
+      } else if (stat.isFile()) {
+        result.push(p);
+      }
+    } catch {}
+  }
+  return result;
+}
+
+describe("expandUntrackedFiles", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "git-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("expands a directory into individual file paths", () => {
+    const subDir = join(tmpDir, "myext");
+    mkdirSync(subDir);
+    writeFileSync(join(subDir, "index.ts"), "export default {}");
+    writeFileSync(join(subDir, "README.md"), "# My Ext");
+
+    const result = expandUntrackedFiles([subDir]);
+    expect(result.sort()).toEqual([
+      join(subDir, "README.md"),
+      join(subDir, "index.ts"),
+    ]);
+  });
+
+  it("passes through individual file paths unchanged", () => {
+    const file = join(tmpDir, "single.txt");
+    writeFileSync(file, "content");
+
+    const result = expandUntrackedFiles([file]);
+    expect(result).toEqual([file]);
+  });
+
+  it("handles nested directories recursively", () => {
+    const nested = join(tmpDir, "a", "b", "c");
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, "deep.txt"), "deep content");
+    writeFileSync(join(tmpDir, "a", "top.txt"), "top content");
+
+    const result = expandUntrackedFiles([join(tmpDir, "a")]);
+    expect(result.sort()).toEqual([
+      join(nested, "deep.txt"),
+      join(tmpDir, "a", "top.txt"),
+    ]);
+  });
+
+  it("handles mixed files and directories", () => {
+    const dir = join(tmpDir, "dir");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "inside.txt"), "inside");
+    const file = join(tmpDir, "outside.txt");
+    writeFileSync(file, "outside");
+
+    const result = expandUntrackedFiles([dir, file]);
+    expect(result.sort()).toEqual([
+      join(dir, "inside.txt"),
+      file,
+    ].sort());
+  });
+
+  it("skips nonexistent paths", () => {
+    const result = expandUntrackedFiles([join(tmpDir, "nope")]);
+    expect(result).toEqual([]);
+  });
+
+  it("handles directory path with trailing slash", () => {
+    const dir = join(tmpDir, "mydir");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "file.txt"), "content");
+
+    const result = expandUntrackedFiles([dir + "/"]);
+    expect(result).toEqual([join(dir, "file.txt")]);
   });
 });

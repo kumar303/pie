@@ -14,7 +14,7 @@
  */
 
 import { execSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import type {
@@ -106,6 +106,46 @@ function statusLabel(status: string): string {
     default:
       return status;
   }
+}
+
+// --- Untracked file expansion ---
+
+/**
+ * Recursively walk a directory, collecting all file paths.
+ */
+function walkDirectory(dir: string, results: string[]): void {
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walkDirectory(fullPath, results);
+      } else if (entry.isFile()) {
+        results.push(fullPath);
+      }
+    }
+  } catch {}
+}
+
+/**
+ * Expand untracked paths into individual file paths.
+ * git status --porcelain shows untracked directories as a single entry
+ * (e.g. "?? dirname/"). This walks directories recursively to resolve
+ * individual files for diff generation.
+ */
+function expandUntrackedFiles(paths: string[]): string[] {
+  const result: string[] = [];
+  for (const p of paths) {
+    try {
+      const stat = statSync(p);
+      if (stat.isDirectory()) {
+        walkDirectory(p, result);
+      } else if (stat.isFile()) {
+        result.push(p);
+      }
+    } catch {}
+  }
+  return result;
 }
 
 // --- UI State Machine ---
@@ -389,10 +429,11 @@ class GitComponent implements Component {
       const file = this.files.find((gf) => gf.path === f);
       return file && file.status !== "??";
     });
-    const untrackedFiles = selectedFiles.filter((f) => {
+    const untrackedPaths = selectedFiles.filter((f) => {
       const file = this.files.find((gf) => gf.path === f);
       return file && file.status === "??";
     });
+    const untrackedFiles = expandUntrackedFiles(untrackedPaths);
 
     if (trackedFiles.length > 0) {
       const quotedTracked = trackedFiles
@@ -457,7 +498,8 @@ class GitComponent implements Component {
     this.tui.requestRender();
 
     try {
-      const apiKey = await this.ctx.modelRegistry.getApiKey(this.ctx.model);
+      const auth = await this.ctx.modelRegistry.getApiKeyAndHeaders(this.ctx.model);
+      if (!auth.ok) throw new Error((auth as { error: string }).error);
       const userMessage: UserMessage = {
         role: "user",
         content: [
@@ -480,7 +522,7 @@ class GitComponent implements Component {
             "IMPORTANT: Your output must NEVER contain the literal string '{}'. Avoid curly braces entirely.",
           messages: [userMessage],
         },
-        { apiKey },
+        { apiKey: auth.apiKey, headers: auth.headers },
       );
 
       const commitMsg = response.content
@@ -1101,10 +1143,11 @@ class GitComponent implements Component {
       if (unstaged) diffOutput += (diffOutput ? "\n" : "") + unstaged;
     } catch {}
 
-    // Include untracked files as pseudo-diffs
-    const untrackedFiles = this.files
+    // Include untracked files as pseudo-diffs (expand directories)
+    const untrackedPaths = this.files
       .filter((f) => f.status === "??")
       .map((f) => f.path);
+    const untrackedFiles = expandUntrackedFiles(untrackedPaths);
 
     for (const f of untrackedFiles) {
       try {
