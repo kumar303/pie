@@ -225,11 +225,6 @@ describe("diff gathering file categorization", () => {
   });
 });
 
-// --- Test expandUntrackedFiles ---
-// git status --porcelain shows untracked directories as a single entry
-// (e.g. "?? dirname/"). expandUntrackedFiles walks directories recursively
-// to resolve individual file paths for diff generation.
-
 // Mirrors getUntrackedFiles from index.ts.
 import { execSync } from "node:child_process";
 
@@ -256,7 +251,6 @@ describe("getUntrackedFiles", () => {
     execSync("git init", { cwd: tmpDir });
     execSync("git config user.email test@test.com", { cwd: tmpDir });
     execSync("git config user.name Test", { cwd: tmpDir });
-    // Create an initial commit so git status works properly
     writeFileSync(join(tmpDir, ".gitkeep"), "");
     execSync("git add . && git commit -m init", { cwd: tmpDir });
     process.chdir(tmpDir);
