@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "es2020",
+    "target": "es2023",
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "esModuleInterop": true,
@@ -9,5 +9,5 @@
     "strict": false
   },
   "include": ["extensions/**/*.ts"],
-  "exclude": ["extensions/**/*.test.ts"]
+  "exclude": []
 }
