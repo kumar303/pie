@@ -337,7 +337,7 @@ describe("search", () => {
   });
 });
 
-describe("log content with tabs", () => {
+describe("log content sanitization", () => {
   it("lines do not exceed width when log lines contain tab characters", () => {
     const logWithTabs = [
       "\t\t\tconst x = 1;",
@@ -355,6 +355,39 @@ describe("log content with tabs", () => {
       // Ensure no tab characters remain in rendered output
       expect(line).not.toContain("\t");
     }
+  });
+
+  it("strips carriage returns from log lines to prevent layout breakage", () => {
+    const logWithCarriageReturn = [
+      "line before",
+      "progress update\rthis should not reset cursor",
+      "line after",
+    ];
+    const { component } = createComponent({
+      readLogFn: () => logWithCarriageReturn,
+    });
+
+    const rendered = component.render(100).join("\n");
+    expect(rendered).not.toContain("\r");
+  });
+
+  it("strips ANSI cursor/control escape sequences from log lines", () => {
+    const logWithAnsiControl = [
+      "before",
+      "\u001b[2K\u001b[1Grewritten line",
+      "\u001b]0;window-title\u0007after-title",
+      "after",
+    ];
+    const { component } = createComponent({
+      readLogFn: () => logWithAnsiControl,
+    });
+
+    const rendered = component.render(100).join("\n");
+    expect(rendered).not.toContain("\u001b[2K");
+    expect(rendered).not.toContain("\u001b[1G");
+    expect(rendered).not.toContain("\u001b]0;");
+    expect(rendered).toContain("rewritten line");
+    expect(rendered).toContain("after-title");
   });
 });
 

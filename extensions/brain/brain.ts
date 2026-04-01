@@ -285,9 +285,22 @@ export class BrainComponent implements Component {
 
   // ── Rendering ───────────────────────────────────────────────────
 
-  /** Replace tab characters with spaces to prevent terminal width miscounting. */
+  /**
+   * Sanitize log lines for safe TUI rendering.
+   * - Tabs are expanded for stable width calculations
+   * - Carriage returns are removed so logs cannot rewrite earlier columns
+   * - ANSI escape/control sequences are stripped to avoid cursor movement
+   */
   private sanitizeLine(line: string): string {
-    return line.replace(/\t/g, "  ");
+    return line
+      .replace(/\t/g, "  ")
+      .replace(/\r/g, "")
+      // CSI sequences (e.g. \x1b[2K, colors, cursor movement)
+      .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+      // OSC sequences (e.g. \x1b]0;title\x07)
+      .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g, "")
+      // Remaining C0 control chars (except newline, already split by lines)
+      .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, "");
   }
 
   private padTo(str: string, w: number): string {
