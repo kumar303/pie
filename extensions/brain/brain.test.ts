@@ -313,6 +313,21 @@ describe("search", () => {
     expect(text).not.toContain("beta [feat/login]");
   });
 
+  it("enter opens the selected directory", () => {
+    const onOpenDir = vi.fn();
+    const { component } = createComponent({ onOpenDir });
+    component.handleInput("/");
+    component.handleInput("a");
+    component.handleInput("l");
+    component.handleInput("p");
+    component.handleInput("h");
+    component.handleInput(ENTER);
+    expect(onOpenDir).toHaveBeenCalledTimes(1);
+    expect(onOpenDir).toHaveBeenCalledWith(
+      expect.objectContaining({ dir: "/home/user/alpha" }),
+    );
+  });
+
   it("backspace to empty exits search", () => {
     const { component } = createComponent();
     component.handleInput("/");

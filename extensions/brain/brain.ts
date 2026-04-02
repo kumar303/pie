@@ -229,7 +229,12 @@ export class BrainComponent implements Component {
       this.cursor = 0; this.refreshLog();
       this.invalidate(); this.tui.requestRender(); return;
     }
-    if (matchesKey(data, Key.enter)) { this.searchMode = false; this.invalidate(); this.tui.requestRender(); return; }
+    if (matchesKey(data, Key.enter)) {
+      this.searchMode = false;
+      const dir = this.selectedDir();
+      if (dir) this.onOpenDir(dir);
+      this.invalidate(); this.tui.requestRender(); return;
+    }
     if (matchesKey(data, Key.up)) { this.moveCursor(-1); this.refreshLog(); this.invalidate(); this.tui.requestRender(); return; }
     if (matchesKey(data, Key.down)) { this.moveCursor(1); this.refreshLog(); this.invalidate(); this.tui.requestRender(); return; }
     if (matchesKey(data, Key.backspace)) {
