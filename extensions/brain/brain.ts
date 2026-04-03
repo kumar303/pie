@@ -139,10 +139,14 @@ export class BrainComponent implements Component {
    * This interval only animates — it never reads files or polls.
    */
   private maybeStartSpinner(): void {
-    const hasActive = [...this.data.today, ...this.data.earlier].some((d) => d.active);
+    const hasActive = [...this.data.today, ...this.data.earlier].some(
+      (d) => d.active,
+    );
     if (hasActive && !this.spinnerTimer) {
       this.spinnerTimer = setInterval(() => {
-        const stillActive = [...this.data.today, ...this.data.earlier].some((d) => d.active);
+        const stillActive = [...this.data.today, ...this.data.earlier].some(
+          (d) => d.active,
+        );
         if (!stillActive) {
           clearInterval(this.spinnerTimer!);
           this.spinnerTimer = null;
@@ -199,65 +203,166 @@ export class BrainComponent implements Component {
   }
 
   private handleDirListInput(data: string): void {
-    if (matchesKey(data, Key.escape)) { this.onDone(); return; }
-    if (matchesKey(data, Key.tab)) { this.focusedPanel = "logs"; this.invalidate(); this.tui.requestRender(); return; }
-    if (matchesKey(data, "/")) { this.searchMode = true; this.searchQuery = ""; this.invalidate(); this.tui.requestRender(); return; }
+    if (matchesKey(data, Key.escape)) {
+      this.onDone();
+      return;
+    }
+    if (matchesKey(data, Key.tab)) {
+      this.focusedPanel = "logs";
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+    if (matchesKey(data, "/")) {
+      this.searchMode = true;
+      this.searchQuery = "";
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
     if (matchesKey(data, Key.enter)) {
       const dir = this.selectedDir();
       if (dir) this.onOpenDir(dir);
       return;
     }
-    if (matchesKey(data, Key.up)) { this.moveCursor(-1); this.refreshLog(); this.invalidate(); this.tui.requestRender(); return; }
-    if (matchesKey(data, Key.down)) { this.moveCursor(1); this.refreshLog(); this.invalidate(); this.tui.requestRender(); return; }
+    if (matchesKey(data, Key.up)) {
+      this.moveCursor(-1);
+      this.refreshLog();
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+    if (matchesKey(data, Key.down)) {
+      this.moveCursor(1);
+      this.refreshLog();
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
   }
 
   private handleLogsInput(data: string): void {
-    if (matchesKey(data, Key.escape)) { this.onDone(); return; }
-    if (matchesKey(data, Key.tab)) { this.focusedPanel = "dirs"; this.invalidate(); this.tui.requestRender(); return; }
-    if (matchesKey(data, Key.up)) { this.logScrollOffset = Math.max(0, this.logScrollOffset - 1); this.invalidate(); this.tui.requestRender(); return; }
-    if (matchesKey(data, Key.down)) { this.logScrollOffset = Math.min(this.maxLogScroll(), this.logScrollOffset + 1); this.invalidate(); this.tui.requestRender(); return; }
-    if (matchesKey(data, "d")) { const h = Math.max(1, Math.floor(this.getLogPanelHeight() / 2)); this.logScrollOffset = Math.min(this.maxLogScroll(), this.logScrollOffset + h); this.invalidate(); this.tui.requestRender(); return; }
-    if (matchesKey(data, "u")) { const h = Math.max(1, Math.floor(this.getLogPanelHeight() / 2)); this.logScrollOffset = Math.max(0, this.logScrollOffset - h); this.invalidate(); this.tui.requestRender(); return; }
-    if (matchesKey(data, "g")) { this.logScrollOffset = 0; this.invalidate(); this.tui.requestRender(); return; }
-    if (matchesKey(data, Key.shift("g"))) { this.logScrollOffset = this.maxLogScroll(); this.invalidate(); this.tui.requestRender(); return; }
+    if (matchesKey(data, Key.escape)) {
+      this.onDone();
+      return;
+    }
+    if (matchesKey(data, Key.tab)) {
+      this.focusedPanel = "dirs";
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+    if (matchesKey(data, Key.up)) {
+      this.logScrollOffset = Math.max(0, this.logScrollOffset - 1);
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+    if (matchesKey(data, Key.down)) {
+      this.logScrollOffset = Math.min(
+        this.maxLogScroll(),
+        this.logScrollOffset + 1,
+      );
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+    if (matchesKey(data, "d")) {
+      const h = Math.max(1, Math.floor(this.getLogPanelHeight() / 2));
+      this.logScrollOffset = Math.min(
+        this.maxLogScroll(),
+        this.logScrollOffset + h,
+      );
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+    if (matchesKey(data, "u")) {
+      const h = Math.max(1, Math.floor(this.getLogPanelHeight() / 2));
+      this.logScrollOffset = Math.max(0, this.logScrollOffset - h);
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+    if (matchesKey(data, "g")) {
+      this.logScrollOffset = 0;
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+    if (matchesKey(data, Key.shift("g"))) {
+      this.logScrollOffset = this.maxLogScroll();
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
   }
 
   private handleSearchInput(data: string): void {
     if (matchesKey(data, Key.escape)) {
-      this.searchMode = false; this.searchQuery = "";
-      this.filteredToday = this.data.today; this.filteredEarlier = this.data.earlier;
-      this.cursor = 0; this.refreshLog();
-      this.invalidate(); this.tui.requestRender(); return;
+      this.searchMode = false;
+      this.searchQuery = "";
+      this.filteredToday = this.data.today;
+      this.filteredEarlier = this.data.earlier;
+      this.cursor = 0;
+      this.refreshLog();
+      this.invalidate();
+      this.tui.requestRender();
+      return;
     }
     if (matchesKey(data, Key.enter)) {
       this.searchMode = false;
       const dir = this.selectedDir();
       if (dir) this.onOpenDir(dir);
-      this.invalidate(); this.tui.requestRender(); return;
+      this.invalidate();
+      this.tui.requestRender();
+      return;
     }
-    if (matchesKey(data, Key.up)) { this.moveCursor(-1); this.refreshLog(); this.invalidate(); this.tui.requestRender(); return; }
-    if (matchesKey(data, Key.down)) { this.moveCursor(1); this.refreshLog(); this.invalidate(); this.tui.requestRender(); return; }
+    if (matchesKey(data, Key.up)) {
+      this.moveCursor(-1);
+      this.refreshLog();
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+    if (matchesKey(data, Key.down)) {
+      this.moveCursor(1);
+      this.refreshLog();
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
     if (matchesKey(data, Key.backspace)) {
       if (this.searchQuery.length === 0) {
         this.searchMode = false;
-        this.filteredToday = this.data.today; this.filteredEarlier = this.data.earlier;
-        this.cursor = 0; this.refreshLog();
+        this.filteredToday = this.data.today;
+        this.filteredEarlier = this.data.earlier;
+        this.cursor = 0;
+        this.refreshLog();
       } else {
         this.searchQuery = this.searchQuery.slice(0, -1);
         if (this.searchQuery.length === 0) {
           this.searchMode = false;
-          this.filteredToday = this.data.today; this.filteredEarlier = this.data.earlier;
-          this.cursor = 0; this.refreshLog();
+          this.filteredToday = this.data.today;
+          this.filteredEarlier = this.data.earlier;
+          this.cursor = 0;
+          this.refreshLog();
         } else {
           this.applyFilter();
         }
       }
-      this.invalidate(); this.tui.requestRender(); return;
+      this.invalidate();
+      this.tui.requestRender();
+      return;
     }
     // Decode printable character (Kitty protocol or raw byte)
     const ch = this.decodePrintable(data);
     if (ch && /[a-zA-Z0-9\-_./@ {}#~+=]/.test(ch)) {
-      this.searchQuery += ch; this.applyFilter(); this.invalidate(); this.tui.requestRender(); return;
+      this.searchQuery += ch;
+      this.applyFilter();
+      this.invalidate();
+      this.tui.requestRender();
+      return;
     }
   }
 
@@ -297,15 +402,17 @@ export class BrainComponent implements Component {
    * - ANSI escape/control sequences are stripped to avoid cursor movement
    */
   private sanitizeLine(line: string): string {
-    return line
-      .replace(/\t/g, "  ")
-      .replace(/\r/g, "")
-      // CSI sequences (e.g. \x1b[2K, colors, cursor movement)
-      .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
-      // OSC sequences (e.g. \x1b]0;title\x07)
-      .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g, "")
-      // Remaining C0 control chars (except newline, already split by lines)
-      .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, "");
+    return (
+      line
+        .replace(/\t/g, "  ")
+        .replace(/\r/g, "")
+        // CSI sequences (e.g. \x1b[2K, colors, cursor movement)
+        .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+        // OSC sequences (e.g. \x1b]0;title\x07)
+        .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g, "")
+        // Remaining C0 control chars (except newline, already split by lines)
+        .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, "")
+    );
   }
 
   private padTo(str: string, w: number): string {
@@ -314,7 +421,13 @@ export class BrainComponent implements Component {
     return str + " ".repeat(w - vis);
   }
 
-  private row(left: string, right: string, lw: number, rw: number, width: number): string {
+  private row(
+    left: string,
+    right: string,
+    lw: number,
+    rw: number,
+    width: number,
+  ): string {
     return truncateToWidth(
       this.padTo(left, lw) + this.theme.fg("dim", "│") + this.padTo(right, rw),
       width,
@@ -384,7 +497,9 @@ export class BrainComponent implements Component {
     const leftFocused = this.focusedPanel === "dirs";
     const logsFocused = this.focusedPanel === "logs";
     const cwdName = basename(this.cwd);
-    const cwdBranchLabel = this.cwdBranch ? theme.fg("muted", ` [${this.cwdBranch}]`) : "";
+    const cwdBranchLabel = this.cwdBranch
+      ? theme.fg("muted", ` [${this.cwdBranch}]`)
+      : "";
     const dirsHeader = leftFocused
       ? theme.fg("accent", theme.bold(" ▶ " + cwdName)) + cwdBranchLabel
       : theme.fg("dim", "   " + cwdName) + cwdBranchLabel;
@@ -396,25 +511,35 @@ export class BrainComponent implements Component {
     // Accent border
     const leftBorder = leftFocused ? "═" : "─";
     const rightBorder = logsFocused ? "═" : "─";
-    lines.push(truncateToWidth(
-      theme.fg(leftFocused ? "accent" : "dim", leftBorder.repeat(lw)) +
-      theme.fg("dim", "│") +
-      theme.fg(logsFocused ? "accent" : "dim", rightBorder.repeat(rw)),
-      width,
-    ));
+    lines.push(
+      truncateToWidth(
+        theme.fg(leftFocused ? "accent" : "dim", leftBorder.repeat(lw)) +
+          theme.fg("dim", "│") +
+          theme.fg(logsFocused ? "accent" : "dim", rightBorder.repeat(rw)),
+        width,
+      ),
+    );
 
     // Content rows: left sections paired with log lines (bottom-aligned)
     const logTopPadding = Math.max(0, totalRows - this.logLines.length);
     for (let i = 0; i < totalRows; i++) {
       const logIdx = this.logScrollOffset + (i - logTopPadding);
-      const right = logIdx >= 0 && logIdx < this.logLines.length ? " " + this.sanitizeLine(this.logLines[logIdx]) : "";
+      const right =
+        logIdx >= 0 && logIdx < this.logLines.length
+          ? " " + this.sanitizeLine(this.logLines[logIdx])
+          : "";
       lines.push(this.row(leftRows[i], right, lw, rw, width));
     }
 
     // Bottom separator + legend
     lines.push(truncateToWidth(theme.fg("dim", "─".repeat(width)), width));
     if (this.errorNotification) {
-      lines.push(truncateToWidth(theme.fg("error", " ⚠ " + this.errorNotification), width));
+      lines.push(
+        truncateToWidth(
+          theme.fg("error", " ⚠ " + this.errorNotification),
+          width,
+        ),
+      );
     }
     lines.push(truncateToWidth(this.renderLegend(), width));
 
@@ -427,7 +552,8 @@ export class BrainComponent implements Component {
     const theme = this.theme;
     const entry = this.unifiedList[unifiedIndex];
     if (!entry) return "";
-    const isSelected = this.focusedPanel === "dirs" && unifiedIndex === this.cursor;
+    const isSelected =
+      this.focusedPanel === "dirs" && unifiedIndex === this.cursor;
 
     let prefix: string;
     if (entry.active) {
@@ -437,21 +563,35 @@ export class BrainComponent implements Component {
     }
 
     const name = basename(entry.dir);
-    const branchSuffix = entry.branch ? theme.fg("muted", ` [${entry.branch}]`) : "";
+    const branchSuffix = entry.branch
+      ? theme.fg("muted", ` [${entry.branch}]`)
+      : "";
 
     if (isSelected) {
-      return truncateToWidth("   " + prefix + theme.fg("accent", "> " + name) + branchSuffix, maxWidth);
+      return truncateToWidth(
+        "   " + prefix + theme.fg("accent", "> " + name) + branchSuffix,
+        maxWidth,
+      );
     }
-    return truncateToWidth("   " + prefix + "  " + theme.fg("text", name) + branchSuffix, maxWidth);
+    return truncateToWidth(
+      "   " + prefix + "  " + theme.fg("text", name) + branchSuffix,
+      maxWidth,
+    );
   }
 
   private renderLegend(): string {
     const theme = this.theme;
     if (this.searchMode) {
-      return theme.fg("dim", ` / ${this.searchQuery}_ • ↑↓ navigate • enter accept • esc clear`);
+      return theme.fg(
+        "dim",
+        ` / ${this.searchQuery}_ • ↑↓ navigate • enter accept • esc clear`,
+      );
     }
     if (this.focusedPanel === "logs") {
-      return theme.fg("dim", " ↑↓ scroll • d page down • u page up • g top • G bottom • tab back • esc quit");
+      return theme.fg(
+        "dim",
+        " ↑↓ scroll • d page down • u page up • g top • G bottom • tab back • esc quit",
+      );
     }
     return theme.fg("dim", " ↑↓ navigate • tab logs • / search • esc quit");
   }

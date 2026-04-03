@@ -281,7 +281,10 @@ describe("getUntrackedFiles", () => {
   it("respects .gitignore", () => {
     writeFileSync(join(tmpDir, ".gitignore"), "node_modules/\n");
     mkdirSync(join(tmpDir, "node_modules", "some-pkg"), { recursive: true });
-    writeFileSync(join(tmpDir, "node_modules", "some-pkg", "index.js"), "module.exports = {}");
+    writeFileSync(
+      join(tmpDir, "node_modules", "some-pkg", "index.js"),
+      "module.exports = {}",
+    );
     writeFileSync(join(tmpDir, "real-file.txt"), "keep me");
 
     const result = getUntrackedFiles();

@@ -27,11 +27,7 @@ import {
   type DirEntry,
 } from "./store.js";
 import { BrainComponent } from "./brain.js";
-import {
-  ensureService,
-  type Client,
-  type PubSubMessage,
-} from "./service.js";
+import { ensureService, type Client, type PubSubMessage } from "./service.js";
 
 export default function (pi: ExtensionAPI) {
   // ── Per-session state ───────────────────────────────────────────
@@ -304,10 +300,7 @@ function openInEditor(dir: string, ctx: ExtensionContext): void {
     }
 
     if (result.error) {
-      ctx.ui.notify(
-        `Failed to open ${dir}: ${result.error.message}`,
-        "error",
-      );
+      ctx.ui.notify(`Failed to open ${dir}: ${result.error.message}`, "error");
     } else if (result.status !== null && result.status !== 0) {
       const detail =
         ((result.stderr || result.stdout || "") as string).trim() ||

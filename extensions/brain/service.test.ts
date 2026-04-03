@@ -40,7 +40,9 @@ afterEach(async () => {
 
   // Clean up any leftover socket file
   const sp = getSocketPath(tmpDir);
-  try { if (existsSync(sp)) unlinkSync(sp); } catch {}
+  try {
+    if (existsSync(sp)) unlinkSync(sp);
+  } catch {}
 });
 
 function socketPath(): string {
@@ -246,8 +248,20 @@ describe("BrainService", () => {
     const received: PubSubMessage[] = [];
     client2.onMessage((msg) => received.push(msg));
 
-    client1.publish({ type: "status", sessionId: "s1", dir: "/a", branch: null, state: "working" });
-    client1.publish({ type: "status", sessionId: "s1", dir: "/a", branch: null, state: "idle" });
+    client1.publish({
+      type: "status",
+      sessionId: "s1",
+      dir: "/a",
+      branch: null,
+      state: "working",
+    });
+    client1.publish({
+      type: "status",
+      sessionId: "s1",
+      dir: "/a",
+      branch: null,
+      state: "idle",
+    });
 
     await waitFor(() => received.length >= 2);
     expect(received[0]).toMatchObject({ state: "working" });

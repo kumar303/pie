@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -157,8 +163,20 @@ describe("readSessions", () => {
     const now = Date.now();
     // Write two entries for same dir
     const file = join(tmpDir, "sessions.jsonl");
-    const e1 = JSON.stringify({ sessionId: "s1", dir: "/tmp/a", branch: null, timestamp: now - 1000, lastFocused: now - 1000 });
-    const e2 = JSON.stringify({ sessionId: "s1", dir: "/tmp/a", branch: "main", timestamp: now, lastFocused: now });
+    const e1 = JSON.stringify({
+      sessionId: "s1",
+      dir: "/tmp/a",
+      branch: null,
+      timestamp: now - 1000,
+      lastFocused: now - 1000,
+    });
+    const e2 = JSON.stringify({
+      sessionId: "s1",
+      dir: "/tmp/a",
+      branch: "main",
+      timestamp: now,
+      lastFocused: now,
+    });
     writeFileSync(file, e1 + "\n" + e2 + "\n");
 
     const data = readSessions(tmpDir, now);
@@ -173,9 +191,21 @@ describe("readSessions", () => {
     todayStart.setHours(0, 0, 0, 0);
 
     const file = join(tmpDir, "sessions.jsonl");
-    const todayEntry = JSON.stringify({ sessionId: "s1", dir: "/tmp/today", branch: null, timestamp: now, lastFocused: now });
+    const todayEntry = JSON.stringify({
+      sessionId: "s1",
+      dir: "/tmp/today",
+      branch: null,
+      timestamp: now,
+      lastFocused: now,
+    });
     const yesterdayTime = todayStart.getTime() - 1000;
-    const earlierEntry = JSON.stringify({ sessionId: "s2", dir: "/tmp/yesterday", branch: null, timestamp: yesterdayTime, lastFocused: yesterdayTime });
+    const earlierEntry = JSON.stringify({
+      sessionId: "s2",
+      dir: "/tmp/yesterday",
+      branch: null,
+      timestamp: yesterdayTime,
+      lastFocused: yesterdayTime,
+    });
     writeFileSync(file, todayEntry + "\n" + earlierEntry + "\n");
 
     const data = readSessions(tmpDir, now);
@@ -190,13 +220,14 @@ describe("readSessions", () => {
     const file = join(tmpDir, "sessions.jsonl");
     let content = "";
     for (let i = 0; i < 110; i++) {
-      content += JSON.stringify({
-        sessionId: `s${i}`,
-        dir: `/tmp/project-${i}`,
-        branch: null,
-        timestamp: now - i * 1000,
-        lastFocused: now - i * 1000,
-      }) + "\n";
+      content +=
+        JSON.stringify({
+          sessionId: `s${i}`,
+          dir: `/tmp/project-${i}`,
+          branch: null,
+          timestamp: now - i * 1000,
+          lastFocused: now - i * 1000,
+        }) + "\n";
     }
     writeFileSync(file, content);
 
@@ -207,8 +238,20 @@ describe("readSessions", () => {
   it("sorts by most recently focused first", () => {
     const now = Date.now();
     const file = join(tmpDir, "sessions.jsonl");
-    const e1 = JSON.stringify({ sessionId: "s1", dir: "/tmp/a", branch: null, timestamp: now - 2000, lastFocused: now - 2000 });
-    const e2 = JSON.stringify({ sessionId: "s2", dir: "/tmp/b", branch: null, timestamp: now - 1000, lastFocused: now });
+    const e1 = JSON.stringify({
+      sessionId: "s1",
+      dir: "/tmp/a",
+      branch: null,
+      timestamp: now - 2000,
+      lastFocused: now - 2000,
+    });
+    const e2 = JSON.stringify({
+      sessionId: "s2",
+      dir: "/tmp/b",
+      branch: null,
+      timestamp: now - 1000,
+      lastFocused: now,
+    });
     writeFileSync(file, e1 + "\n" + e2 + "\n");
 
     const data = readSessions(tmpDir, now);
@@ -221,8 +264,20 @@ describe("readSessions", () => {
     const now = Date.now();
     const oldTime = now - 61 * 24 * 60 * 60 * 1000;
     const file = join(tmpDir, "sessions.jsonl");
-    const e1 = JSON.stringify({ sessionId: "s1", dir: "/tmp/old", branch: null, timestamp: oldTime, lastFocused: oldTime });
-    const e2 = JSON.stringify({ sessionId: "s2", dir: "/tmp/new", branch: null, timestamp: now, lastFocused: now });
+    const e1 = JSON.stringify({
+      sessionId: "s1",
+      dir: "/tmp/old",
+      branch: null,
+      timestamp: oldTime,
+      lastFocused: oldTime,
+    });
+    const e2 = JSON.stringify({
+      sessionId: "s2",
+      dir: "/tmp/new",
+      branch: null,
+      timestamp: now,
+      lastFocused: now,
+    });
     writeFileSync(file, e1 + "\n" + e2 + "\n");
 
     const data = readSessions(tmpDir, now);
@@ -234,7 +289,16 @@ describe("readSessions", () => {
   it("populates active flag from disk on startup", () => {
     const now = Date.now();
     const file = join(tmpDir, "sessions.jsonl");
-    writeFileSync(file, JSON.stringify({ sessionId: "s1", dir: "/tmp/active", branch: null, timestamp: now, lastFocused: now }) + "\n");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        sessionId: "s1",
+        dir: "/tmp/active",
+        branch: null,
+        timestamp: now,
+        lastFocused: now,
+      }) + "\n",
+    );
     writeStatus("s1", "working", tmpDir);
 
     const data = readSessions(tmpDir, now + 1000);
@@ -246,9 +310,27 @@ describe("readSessions", () => {
 
 describe("filterDirs", () => {
   const dirs: DirEntry[] = [
-    { sessionId: "s1", dir: "/home/user/project-alpha", branch: "main", lastFocused: 1, active: false },
-    { sessionId: "s2", dir: "/home/user/project-beta", branch: "feat/login", lastFocused: 2, active: false },
-    { sessionId: "s3", dir: "/home/user/gamma", branch: null, lastFocused: 3, active: false },
+    {
+      sessionId: "s1",
+      dir: "/home/user/project-alpha",
+      branch: "main",
+      lastFocused: 1,
+      active: false,
+    },
+    {
+      sessionId: "s2",
+      dir: "/home/user/project-beta",
+      branch: "feat/login",
+      lastFocused: 2,
+      active: false,
+    },
+    {
+      sessionId: "s3",
+      dir: "/home/user/gamma",
+      branch: null,
+      lastFocused: 3,
+      active: false,
+    },
   ];
 
   it("returns all dirs for empty query", () => {
@@ -310,8 +392,25 @@ describe("pruneOldSessions", () => {
     const oldTime = now - 2 * 24 * 60 * 60 * 1000; // 2 days ago
 
     const file = join(tmpDir, "sessions.jsonl");
-    writeFileSync(file, JSON.stringify({ sessionId: "old", dir: "/tmp/old", branch: null, timestamp: oldTime, lastFocused: oldTime }) + "\n"
-      + JSON.stringify({ sessionId: "new", dir: "/tmp/new", branch: null, timestamp: now, lastFocused: now }) + "\n");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        sessionId: "old",
+        dir: "/tmp/old",
+        branch: null,
+        timestamp: oldTime,
+        lastFocused: oldTime,
+      }) +
+        "\n" +
+        JSON.stringify({
+          sessionId: "new",
+          dir: "/tmp/new",
+          branch: null,
+          timestamp: now,
+          lastFocused: now,
+        }) +
+        "\n",
+    );
 
     writeStatus("old", "idle", tmpDir);
     appendLog("old", "bash", "old output", tmpDir);
@@ -338,9 +437,25 @@ describe("pruneOldSessions", () => {
 
     const file = join(tmpDir, "sessions.jsonl");
     // Two entries for same session: one old dir, one new dir
-    writeFileSync(file,
-      JSON.stringify({ sessionId: "s1", dir: "/tmp/old", branch: null, timestamp: oldTime, lastFocused: oldTime }) + "\n"
-      + JSON.stringify({ sessionId: "s1", dir: "/tmp/new", branch: null, timestamp: now, lastFocused: now }) + "\n");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        sessionId: "s1",
+        dir: "/tmp/old",
+        branch: null,
+        timestamp: oldTime,
+        lastFocused: oldTime,
+      }) +
+        "\n" +
+        JSON.stringify({
+          sessionId: "s1",
+          dir: "/tmp/new",
+          branch: null,
+          timestamp: now,
+          lastFocused: now,
+        }) +
+        "\n",
+    );
 
     writeStatus("s1", "working", tmpDir);
 

@@ -58,7 +58,10 @@ import { homedir } from "node:os";
 
 /** @param {string} [dataDir] @returns {string} */
 export function getDataDir(dataDir) {
-  const dir = dataDir || process.env.PI_BRAIN_DIR || join(homedir(), ".pi", "agent", "brain");
+  const dir =
+    dataDir ||
+    process.env.PI_BRAIN_DIR ||
+    join(homedir(), ".pi", "agent", "brain");
   mkdirSync(join(dir, "status"), { recursive: true });
   mkdirSync(join(dir, "logs"), { recursive: true });
   return dir;
@@ -84,12 +87,14 @@ function logPath(dataDir, sessionId) {
 /** @param {string} dir @returns {string | null} */
 export function getGitBranch(dir) {
   try {
-    return execSync("git branch --show-current", {
-      encoding: "utf-8",
-      timeout: 3000,
-      cwd: dir,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim() || null;
+    return (
+      execSync("git branch --show-current", {
+        encoding: "utf-8",
+        timeout: 3000,
+        cwd: dir,
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim() || null
+    );
   } catch {
     return null;
   }
@@ -163,7 +168,7 @@ export function isSessionActive(sessionId, dataDir, now) {
   if (!status) return false;
   if (status.state !== "working") return false;
   const currentTime = now ?? Date.now();
-  return (currentTime - status.updatedAt) < STALE_MS;
+  return currentTime - status.updatedAt < STALE_MS;
 }
 
 // ── Read sessions ───────────────────────────────────────────────────
@@ -326,14 +331,21 @@ export function pruneOldSessions(maxAgeDays, dataDir) {
 
   // Rewrite sessions.jsonl with only kept entries
   const file = sessionsPath(dd);
-  writeFileSync(file, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : ""));
+  writeFileSync(
+    file,
+    kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : ""),
+  );
 
   // Don't remove files for sessions that are still referenced by kept entries
   const keptSessionIds = new Set(kept.map((e) => e.sessionId));
   for (const sid of removedSessionIds) {
     if (keptSessionIds.has(sid)) continue;
     // Remove status and log files
-    try { unlinkSync(statusPath(dd, sid)); } catch {}
-    try { unlinkSync(logPath(dd, sid)); } catch {}
+    try {
+      unlinkSync(statusPath(dd, sid));
+    } catch {}
+    try {
+      unlinkSync(logPath(dd, sid));
+    } catch {}
   }
 }

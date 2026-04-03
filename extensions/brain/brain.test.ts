@@ -19,9 +19,27 @@ function makeTheme() {
 
 function makeDirs(overrides?: Partial<DirEntry>[]): DirEntry[] {
   const defaults: DirEntry[] = [
-    { sessionId: "s1", dir: "/home/user/alpha", branch: "main", lastFocused: 1000, active: false },
-    { sessionId: "s2", dir: "/home/user/beta", branch: "feat/login", lastFocused: 900, active: false },
-    { sessionId: "s3", dir: "/home/user/gamma", branch: null, lastFocused: 800, active: false },
+    {
+      sessionId: "s1",
+      dir: "/home/user/alpha",
+      branch: "main",
+      lastFocused: 1000,
+      active: false,
+    },
+    {
+      sessionId: "s2",
+      dir: "/home/user/beta",
+      branch: "feat/login",
+      lastFocused: 900,
+      active: false,
+    },
+    {
+      sessionId: "s3",
+      dir: "/home/user/gamma",
+      branch: null,
+      lastFocused: 800,
+      active: false,
+    },
   ];
   if (overrides) {
     return defaults.map((d, i) => ({ ...d, ...(overrides[i] || {}) }));
@@ -29,13 +47,18 @@ function makeDirs(overrides?: Partial<DirEntry>[]): DirEntry[] {
   return defaults;
 }
 
-function makeData(opts?: { today?: DirEntry[]; earlier?: DirEntry[] }): BrainData {
+function makeData(opts?: {
+  today?: DirEntry[];
+  earlier?: DirEntry[];
+}): BrainData {
   return {
     today: opts?.today ?? makeDirs(),
-    earlier: opts?.earlier ?? makeDirs([
-      { sessionId: "s4", dir: "/home/user/delta", branch: "develop" },
-      { sessionId: "s5", dir: "/home/user/epsilon", branch: null },
-    ]),
+    earlier:
+      opts?.earlier ??
+      makeDirs([
+        { sessionId: "s4", dir: "/home/user/delta", branch: "develop" },
+        { sessionId: "s5", dir: "/home/user/epsilon", branch: null },
+      ]),
   };
 }
 
@@ -59,11 +82,19 @@ function createComponent(opts?: {
   const data = opts?.data ?? makeData();
   const readLogFn = opts?.readLogFn ?? fakeReadLog;
 
-  const component = new BrainComponent(tui, theme, onDone, onOpenDir, data, readLogFn, {
-    cwd: opts?.cwd ?? "/home/user/current-project",
-    cwdBranch: opts?.cwdBranch ?? "main",
-    readSessionsFn: opts?.readSessionsFn,
-  });
+  const component = new BrainComponent(
+    tui,
+    theme,
+    onDone,
+    onOpenDir,
+    data,
+    readLogFn,
+    {
+      cwd: opts?.cwd ?? "/home/user/current-project",
+      cwdBranch: opts?.cwdBranch ?? "main",
+      readSessionsFn: opts?.readSessionsFn,
+    },
+  );
   return { component, tui, onDone, onOpenDir, data };
 }
 
@@ -92,14 +123,20 @@ afterEach(() => {
 
 describe("header shows cwd", () => {
   it("shows current directory and branch in the header", () => {
-    const { component } = createComponent({ cwd: "/home/user/my-project", cwdBranch: "feat/cool" });
+    const { component } = createComponent({
+      cwd: "/home/user/my-project",
+      cwdBranch: "feat/cool",
+    });
     const text = renderText(component);
     expect(text).toContain("my-project");
     expect(text).toContain("feat/cool");
   });
 
   it("shows current directory without branch when branch is null", () => {
-    const { component } = createComponent({ cwd: "/tmp/no-git-repo", cwdBranch: null });
+    const { component } = createComponent({
+      cwd: "/tmp/no-git-repo",
+      cwdBranch: null,
+    });
     const text = renderText(component);
     expect(text).toContain("no-git-repo");
     expect(text).not.toContain("[null]");
@@ -221,7 +258,7 @@ describe("arrow keys navigate unified today/earlier list", () => {
     component.handleInput(DOWN); // beta
     component.handleInput(DOWN); // gamma
     component.handleInput(DOWN); // delta (earlier[0])
-    component.handleInput(UP);   // → gamma (today[2])
+    component.handleInput(UP); // → gamma (today[2])
     const text = renderText(component);
     expect(text).toContain("> gamma");
   });
@@ -445,7 +482,9 @@ describe("Panel B scroll", () => {
     });
     const lines = component.render(80).map(stripAnsi);
     // Find content rows between the accent border and the bottom separator
-    const borderIdx = lines.findIndex((l) => l.includes("═") || /^[─═│]+$/.test(l.replace(/[^─═│]/g, "")));
+    const borderIdx = lines.findIndex(
+      (l) => l.includes("═") || /^[─═│]+$/.test(l.replace(/[^─═│]/g, "")),
+    );
     // Content rows start after the accent border (index 1) and end before the bottom separator
     const sepIdx = lines.findLastIndex((l) => /^─+$/.test(l.trim()));
     const contentRows = lines.slice(2, sepIdx);
@@ -518,7 +557,15 @@ describe("active dirs show spinner", () => {
   it("shows spinner for active directory", () => {
     const { component } = createComponent({
       data: {
-        today: [{ sessionId: "s1", dir: "/home/user/active-project", branch: "main", lastFocused: 1000, active: true }],
+        today: [
+          {
+            sessionId: "s1",
+            dir: "/home/user/active-project",
+            branch: "main",
+            lastFocused: 1000,
+            active: true,
+          },
+        ],
         earlier: [],
       },
     });
@@ -533,8 +580,20 @@ describe("active dirs show spinner", () => {
     const { component } = createComponent({
       data: {
         today: [
-          { sessionId: "s1", dir: "/home/user/active", branch: null, lastFocused: 1000, active: true },
-          { sessionId: "s2", dir: "/home/user/idle", branch: null, lastFocused: 900, active: false },
+          {
+            sessionId: "s1",
+            dir: "/home/user/active",
+            branch: null,
+            lastFocused: 1000,
+            active: true,
+          },
+          {
+            sessionId: "s2",
+            dir: "/home/user/idle",
+            branch: null,
+            lastFocused: 900,
+            active: false,
+          },
         ],
         earlier: [],
       },
@@ -552,7 +611,15 @@ describe("active dirs show spinner", () => {
   it("does not start spinner timer when no active dirs", () => {
     const { component } = createComponent({
       data: {
-        today: [{ sessionId: "s1", dir: "/home/user/idle", branch: null, lastFocused: 1000, active: false }],
+        today: [
+          {
+            sessionId: "s1",
+            dir: "/home/user/idle",
+            branch: null,
+            lastFocused: 1000,
+            active: false,
+          },
+        ],
         earlier: [],
       },
     });
@@ -604,7 +671,15 @@ describe("handleStatusMessage", () => {
   it("clears active flag when status is idle", () => {
     const { component, data } = createComponent({
       data: {
-        today: [{ sessionId: "s1", dir: "/home/user/alpha", branch: "main", lastFocused: 1000, active: true }],
+        today: [
+          {
+            sessionId: "s1",
+            dir: "/home/user/alpha",
+            branch: "main",
+            lastFocused: 1000,
+            active: true,
+          },
+        ],
         earlier: [],
       },
     });
@@ -686,7 +761,13 @@ describe("handleSessionsChanged", () => {
   it("re-reads sessions and refreshes the list", () => {
     const newData: BrainData = {
       today: [
-        { sessionId: "s9", dir: "/home/user/new-project", branch: "feat", lastFocused: 2000, active: false },
+        {
+          sessionId: "s9",
+          dir: "/home/user/new-project",
+          branch: "feat",
+          lastFocused: 2000,
+          active: false,
+        },
       ],
       earlier: [],
     };
@@ -708,8 +789,20 @@ describe("handleSessionsChanged", () => {
   it("preserves search filter when sessions change", () => {
     const newData: BrainData = {
       today: [
-        { sessionId: "s1", dir: "/home/user/alpha", branch: "main", lastFocused: 2000, active: false },
-        { sessionId: "s9", dir: "/home/user/zeta", branch: null, lastFocused: 1000, active: false },
+        {
+          sessionId: "s1",
+          dir: "/home/user/alpha",
+          branch: "main",
+          lastFocused: 2000,
+          active: false,
+        },
+        {
+          sessionId: "s9",
+          dir: "/home/user/zeta",
+          branch: null,
+          lastFocused: 1000,
+          active: false,
+        },
       ],
       earlier: [],
     };
@@ -737,7 +830,15 @@ describe("handleSessionsChanged", () => {
     component.handleInput(DOWN);
 
     const newData: BrainData = {
-      today: [{ sessionId: "s1", dir: "/home/user/only", branch: null, lastFocused: 1000, active: false }],
+      today: [
+        {
+          sessionId: "s1",
+          dir: "/home/user/only",
+          branch: null,
+          lastFocused: 1000,
+          active: false,
+        },
+      ],
       earlier: [],
     };
     const readSessionsFn = vi.fn(() => newData);

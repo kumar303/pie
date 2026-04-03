@@ -131,7 +131,12 @@ function getUntrackedFiles(): string[] {
 
 // --- UI State Machine ---
 
-type Phase = "select-files" | "enter-command" | "result" | "diff-viewer" | "branch-status";
+type Phase =
+  | "select-files"
+  | "enter-command"
+  | "result"
+  | "diff-viewer"
+  | "branch-status";
 
 // --- Main Component ---
 
@@ -178,7 +183,8 @@ class GitComponent implements Component {
   private showLoadingHint = false;
   private forkPointChild: ReturnType<typeof spawn> | null = null;
   private loadingHintTimer: ReturnType<typeof setTimeout> | null = null;
-  private cachedForkPoint: { commit: string; name: string } | null | undefined = undefined;
+  private cachedForkPoint: { commit: string; name: string } | null | undefined =
+    undefined;
   private disposed = false;
 
   // Diff viewer prompt pane (split view)
@@ -261,7 +267,9 @@ class GitComponent implements Component {
    * Returns { commit, name } or null if it can't be determined.
    */
   /** Parse git log output to find the fork point commit. */
-  private parseForkPointFromLog(log: string): { commit: string; name: string } | null {
+  private parseForkPointFromLog(
+    log: string,
+  ): { commit: string; name: string } | null {
     const currentBranch = this.branch || "";
     for (const line of log.split("\n")) {
       if (!line.trim()) continue;
@@ -310,27 +318,43 @@ class GitComponent implements Component {
   }
 
   /** Non-blocking fork point detection using spawn. */
-  private getForkPointAsync(): Promise<{ commit: string; name: string } | null> {
+  private getForkPointAsync(): Promise<{
+    commit: string;
+    name: string;
+  } | null> {
     if (this.cachedForkPoint !== undefined) {
       return Promise.resolve(this.cachedForkPoint);
     }
 
     return new Promise((resolve) => {
-      const child = spawn("git", [
-        "log", "--format=%H%d", "--decorate=short",
-        "--decorate-refs=refs/remotes/", "--first-parent", "-n", "1000",
-      ], {
-        cwd: process.cwd(),
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      const child = spawn(
+        "git",
+        [
+          "log",
+          "--format=%H%d",
+          "--decorate=short",
+          "--decorate-refs=refs/remotes/",
+          "--first-parent",
+          "-n",
+          "1000",
+        ],
+        {
+          cwd: process.cwd(),
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
 
       this.forkPointChild = child;
 
       let stdout = "";
       let stderr = "";
 
-      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
 
       const killTimer = setTimeout(() => {
         child.kill();
@@ -433,7 +457,9 @@ class GitComponent implements Component {
         }).trim();
         if (staged) diffParts.push(staged);
       } catch (err: any) {
-        diffErrors.push(`git diff --cached failed: ${err.stderr?.trim() || err.message}`);
+        diffErrors.push(
+          `git diff --cached failed: ${err.stderr?.trim() || err.message}`,
+        );
       }
       try {
         const unstaged = execSync(`git diff -- ${quotedTracked}`, {
@@ -443,7 +469,9 @@ class GitComponent implements Component {
         }).trim();
         if (unstaged) diffParts.push(unstaged);
       } catch (err: any) {
-        diffErrors.push(`git diff failed: ${err.stderr?.trim() || err.message}`);
+        diffErrors.push(
+          `git diff failed: ${err.stderr?.trim() || err.message}`,
+        );
       }
     }
 
@@ -464,9 +492,10 @@ class GitComponent implements Component {
     }
 
     if (diffParts.length === 0) {
-      const detail = diffErrors.length > 0
-        ? `No diff found for selected files (${diffErrors.join("; ")})`
-        : `No diff found for ${selectedFiles.length} selected file(s)`;
+      const detail =
+        diffErrors.length > 0
+          ? `No diff found for selected files (${diffErrors.join("; ")})`
+          : `No diff found for ${selectedFiles.length} selected file(s)`;
       this.ctx.ui.notify(detail, "error");
       return;
     }
@@ -483,7 +512,9 @@ class GitComponent implements Component {
     this.tui.requestRender();
 
     try {
-      const auth = await this.ctx.modelRegistry.getApiKeyAndHeaders(this.ctx.model);
+      const auth = await this.ctx.modelRegistry.getApiKeyAndHeaders(
+        this.ctx.model,
+      );
       if (!auth.ok) throw new Error((auth as { error: string }).error);
       const userMessage: UserMessage = {
         role: "user",
@@ -571,20 +602,29 @@ class GitComponent implements Component {
     const normalized = cmd.replace(/\s+/g, " ").trim();
 
     // git commit without -m / --message / -F / --file (opens $EDITOR)
-    if (/\bgit\s+commit\b/.test(normalized) &&
-        !/\s-m\s|\s--message[\s=]|\s-F\s|\s--file[\s=]|\s--allow-empty-message\b/.test(normalized)) {
+    if (
+      /\bgit\s+commit\b/.test(normalized) &&
+      !/\s-m\s|\s--message[\s=]|\s-F\s|\s--file[\s=]|\s--allow-empty-message\b/.test(
+        normalized,
+      )
+    ) {
       return "git commit opens $EDITOR which requires an interactive terminal. Use -m \"message\" instead, or use the 'c' shortcut to generate a commit message.";
     }
 
     // git rebase -i / --interactive
-    if (/\bgit\s+rebase\b/.test(normalized) && /\s-i\b|\s--interactive\b/.test(normalized)) {
+    if (
+      /\bgit\s+rebase\b/.test(normalized) &&
+      /\s-i\b|\s--interactive\b/.test(normalized)
+    ) {
       return "Interactive rebase opens $EDITOR which requires an interactive terminal.";
     }
 
     // git merge/tag without -m (may open $EDITOR)
-    if (/\bgit\s+(merge|tag)\b/.test(normalized) &&
-        !/\s-m\s|\s--message[\s=]/.test(normalized) &&
-        !/--no-edit\b/.test(normalized)) {
+    if (
+      /\bgit\s+(merge|tag)\b/.test(normalized) &&
+      !/\s-m\s|\s--message[\s=]/.test(normalized) &&
+      !/--no-edit\b/.test(normalized)
+    ) {
       return `This command may open $EDITOR. Add -m "message" or --no-edit to run non-interactively.`;
     }
 
@@ -1003,7 +1043,9 @@ class GitComponent implements Component {
 
     // Bracketed paste: terminal wraps pasted content in \x1b[200~ ... \x1b[201~
     if (data.includes("\x1b[200~")) {
-      const pasteContent = data.replace(/\x1b\[200~/g, "").replace(/\x1b\[201~/g, "");
+      const pasteContent = data
+        .replace(/\x1b\[200~/g, "")
+        .replace(/\x1b\[201~/g, "");
       if (pasteContent) {
         // Command input is single-line, strip newlines
         const cleaned = pasteContent.replace(/\r?\n/g, " ");
@@ -1034,7 +1076,10 @@ class GitComponent implements Component {
 
   /** Recompute activeDiffLines/activeDiffFileIndex based on hideTests toggle and manually hidden files. */
   private recomputeActiveDiff(): void {
-    if ((!this.hideTests && this.hiddenFiles.size === 0) || this.diffFileIndex.length === 0) {
+    if (
+      (!this.hideTests && this.hiddenFiles.size === 0) ||
+      this.diffFileIndex.length === 0
+    ) {
       this.activeDiffLines = this.diffLines;
       this.activeDiffFileIndex = this.diffFileIndex;
       return;
@@ -1044,17 +1089,23 @@ class GitComponent implements Component {
     const sections: { name: string; startLine: number; endLine: number }[] = [];
     for (let i = 0; i < this.diffFileIndex.length; i++) {
       const start = this.diffFileIndex[i].line;
-      const end = i + 1 < this.diffFileIndex.length
-        ? this.diffFileIndex[i + 1].line
-        : this.diffLines.length;
-      sections.push({ name: this.diffFileIndex[i].name, startLine: start, endLine: end });
+      const end =
+        i + 1 < this.diffFileIndex.length
+          ? this.diffFileIndex[i + 1].line
+          : this.diffLines.length;
+      sections.push({
+        name: this.diffFileIndex[i].name,
+        startLine: start,
+        endLine: end,
+      });
     }
 
     // Include any preamble lines before the first file header
     const filteredLines: string[] = [];
     const filteredFileIndex: { line: number; name: string }[] = [];
 
-    const firstFileStart = sections.length > 0 ? sections[0].startLine : this.diffLines.length;
+    const firstFileStart =
+      sections.length > 0 ? sections[0].startLine : this.diffLines.length;
     for (let i = 0; i < firstFileStart; i++) {
       filteredLines.push(this.diffLines[i]);
     }
@@ -1065,7 +1116,10 @@ class GitComponent implements Component {
       if (this.hideTests && testPattern.test(section.name)) continue;
       // Skip manually hidden files
       if (this.hiddenFiles.has(section.name)) continue;
-      filteredFileIndex.push({ line: filteredLines.length, name: section.name });
+      filteredFileIndex.push({
+        line: filteredLines.length,
+        name: section.name,
+      });
       for (let i = section.startLine; i < section.endLine; i++) {
         filteredLines.push(this.diffLines[i]);
       }
@@ -1269,7 +1323,10 @@ class GitComponent implements Component {
     // Preserve scroll position as much as possible
     const prevScroll = this.diffScrollOffset;
     this.showDiff(diffOutput, "No diff to show");
-    this.diffScrollOffset = Math.min(prevScroll, Math.max(0, this.activeDiffLines.length - 1));
+    this.diffScrollOffset = Math.min(
+      prevScroll,
+      Math.max(0, this.activeDiffLines.length - 1),
+    );
     this.invalidate();
     this.tui.requestRender();
   }
@@ -1332,7 +1389,10 @@ class GitComponent implements Component {
   private handleDiffPaneInput(data: string): void {
     // d = scroll down half page
     if (matchesKey(data, "d")) {
-      const maxScroll = Math.max(0, this.activeDiffLines.length - Math.max(5, 30));
+      const maxScroll = Math.max(
+        0,
+        this.activeDiffLines.length - Math.max(5, 30),
+      );
       this.diffScrollOffset = Math.min(this.diffScrollOffset + 10, maxScroll);
       this.invalidate();
       this.tui.requestRender();
@@ -1355,14 +1415,20 @@ class GitComponent implements Component {
     // G = go to bottom (align last line with bottom of pane)
     if (matchesKey(data, Key.shift("g"))) {
       const availableLines = Math.max(5, 30);
-      this.diffScrollOffset = Math.max(0, this.activeDiffLines.length - availableLines);
+      this.diffScrollOffset = Math.max(
+        0,
+        this.activeDiffLines.length - availableLines,
+      );
       this.invalidate();
       this.tui.requestRender();
       return;
     }
     // Arrow keys / j/k for single line scroll
     if (matchesKey(data, Key.down) || matchesKey(data, "j")) {
-      const maxScroll = Math.max(0, this.activeDiffLines.length - Math.max(5, 30));
+      const maxScroll = Math.max(
+        0,
+        this.activeDiffLines.length - Math.max(5, 30),
+      );
       this.diffScrollOffset = Math.min(this.diffScrollOffset + 1, maxScroll);
       this.invalidate();
       this.tui.requestRender();
@@ -1423,7 +1489,10 @@ class GitComponent implements Component {
       this.hiddenFiles.add(file);
       this.recomputeActiveDiff();
       // Clamp scroll offset after removing lines
-      this.diffScrollOffset = Math.min(this.diffScrollOffset, Math.max(0, this.activeDiffLines.length - 1));
+      this.diffScrollOffset = Math.min(
+        this.diffScrollOffset,
+        Math.max(0, this.activeDiffLines.length - 1),
+      );
       this.invalidate();
       this.tui.requestRender();
       return;
@@ -1462,7 +1531,8 @@ class GitComponent implements Component {
           atom: "Atom",
         };
         const editorBase = editor.split("/").pop() || editor;
-        const macApp = process.platform === "darwin" ? editorAppMap[editorBase] : undefined;
+        const macApp =
+          process.platform === "darwin" ? editorAppMap[editorBase] : undefined;
 
         let result;
         if (macApp) {
@@ -1481,9 +1551,14 @@ class GitComponent implements Component {
           });
         }
         if (result.error) {
-          this.ctx.ui.notify(`Failed to open ${file}: ${result.error.message}`, "error");
+          this.ctx.ui.notify(
+            `Failed to open ${file}: ${result.error.message}`,
+            "error",
+          );
         } else if (result.status !== null && result.status !== 0) {
-          const detail = ((result.stderr || result.stdout || "") as string).trim() || `exit ${result.status}`;
+          const detail =
+            ((result.stderr || result.stdout || "") as string).trim() ||
+            `exit ${result.status}`;
           this.ctx.ui.notify(`Failed to open ${file}: ${detail}`, "error");
         }
       } catch (err: any) {
@@ -1572,7 +1647,9 @@ class GitComponent implements Component {
           text = text.split("${__current_file_diff__}").join(fileDiff);
         }
         if (text.includes("${__current_diff__}")) {
-          text = text.split("${__current_diff__}").join(this.getActiveDiffText());
+          text = text
+            .split("${__current_diff__}")
+            .join(this.getActiveDiffText());
         }
         this.sendPrompt(text);
         this.promptText = "";
@@ -1732,7 +1809,9 @@ class GitComponent implements Component {
 
     // Bracketed paste: terminal wraps pasted content in \x1b[200~ ... \x1b[201~
     if (data.includes("\x1b[200~")) {
-      const pasteContent = data.replace(/\x1b\[200~/g, "").replace(/\x1b\[201~/g, "");
+      const pasteContent = data
+        .replace(/\x1b\[200~/g, "")
+        .replace(/\x1b\[201~/g, "");
       if (pasteContent) {
         this.promptText =
           this.promptText.slice(0, this.promptCursor) +
@@ -1779,9 +1858,10 @@ class GitComponent implements Component {
     for (let i = 0; i < this.activeDiffFileIndex.length; i++) {
       if (this.activeDiffFileIndex[i].name === fileName) {
         startLine = this.activeDiffFileIndex[i].line;
-        endLine = i + 1 < this.activeDiffFileIndex.length
-          ? this.activeDiffFileIndex[i + 1].line
-          : this.activeDiffLines.length;
+        endLine =
+          i + 1 < this.activeDiffFileIndex.length
+            ? this.activeDiffFileIndex[i + 1].line
+            : this.activeDiffLines.length;
         break;
       }
     }
@@ -1808,7 +1888,10 @@ class GitComponent implements Component {
 
   /** Build the wrap map for the prompt text given content width.
    *  Each entry maps a visual (wrapped) line to a range in the original text. */
-  private buildPromptWrapMap(contentWidth: number): { wrappedLines: string[]; wrapMap: { textOffset: number; length: number }[] } {
+  private buildPromptWrapMap(contentWidth: number): {
+    wrappedLines: string[];
+    wrapMap: { textOffset: number; length: number }[];
+  } {
     const wrappedLines: string[] = [];
     const wrapMap: { textOffset: number; length: number }[] = [];
 
@@ -1842,7 +1925,10 @@ class GitComponent implements Component {
           }
           const segment = rawLine.slice(pos, end);
           wrappedLines.push(segment);
-          wrapMap.push({ textOffset: textOffset + pos, length: segment.length });
+          wrapMap.push({
+            textOffset: textOffset + pos,
+            length: segment.length,
+          });
           pos = end;
         }
       }
@@ -1853,7 +1939,9 @@ class GitComponent implements Component {
   }
 
   /** Find the cursor's position in wrapped visual lines */
-  private promptCursorInWrapMap(wrapMap: { textOffset: number; length: number }[]): { line: number; col: number } {
+  private promptCursorInWrapMap(
+    wrapMap: { textOffset: number; length: number }[],
+  ): { line: number; col: number } {
     let remaining = this.promptCursor;
     for (let i = 0; i < wrapMap.length; i++) {
       const { length } = wrapMap[i];
@@ -1863,7 +1951,10 @@ class GitComponent implements Component {
       remaining -= length;
       // If this visual line ends at a newline in the original text, consume it
       const lineEndOffset = wrapMap[i].textOffset + length;
-      if (lineEndOffset < this.promptText.length && this.promptText[lineEndOffset] === "\n") {
+      if (
+        lineEndOffset < this.promptText.length &&
+        this.promptText[lineEndOffset] === "\n"
+      ) {
         remaining--;
       }
     }
@@ -1946,10 +2037,13 @@ class GitComponent implements Component {
       } else {
         lines.push(theme.fg("dim", "─".repeat(width)));
         lines.push(
-          truncateToWidth(theme.fg(
-            "dim",
-            "  ↑↓ navigate • tab select • a all • u unselect • d diff • b branch diff • c commit • enter confirm • esc quit",
-          ), width),
+          truncateToWidth(
+            theme.fg(
+              "dim",
+              "  ↑↓ navigate • tab select • a all • u unselect • d diff • b branch diff • c commit • enter confirm • esc quit",
+            ),
+            width,
+          ),
         );
       }
     } else if (this.phase === "enter-command") {
@@ -1961,7 +2055,12 @@ class GitComponent implements Component {
       for (const f of selectedFiles.slice(0, 5)) {
         const file = this.files.find((gf) => gf.path === f);
         const suffix = file ? ` (${statusLabel(file.status)})` : "";
-        lines.push(truncateToWidth(theme.fg("dim", `    ${f}`) + theme.fg("muted", suffix), width));
+        lines.push(
+          truncateToWidth(
+            theme.fg("dim", `    ${f}`) + theme.fg("muted", suffix),
+            width,
+          ),
+        );
       }
       if (selectedFiles.length > 5) {
         lines.push(
@@ -1976,7 +2075,9 @@ class GitComponent implements Component {
       if (this.cmdPrefix) {
         for (const prefixLine of this.cmdPrefix.split("\n")) {
           if (prefixLine) {
-            lines.push(truncateToWidth(theme.fg("dim", `  ${prefixLine}`), width));
+            lines.push(
+              truncateToWidth(theme.fg("dim", `  ${prefixLine}`), width),
+            );
           }
         }
       }
@@ -2010,7 +2111,15 @@ class GitComponent implements Component {
       const resultLines = this.resultText.split("\n");
       const showLines = resultLines.slice(0, 20);
       for (const rl of showLines) {
-        lines.push(truncateToWidth(theme.fg(this.resultIsError ? "error" : "text", `  ${this.sanitizeLine(rl)}`), width));
+        lines.push(
+          truncateToWidth(
+            theme.fg(
+              this.resultIsError ? "error" : "text",
+              `  ${this.sanitizeLine(rl)}`,
+            ),
+            width,
+          ),
+        );
       }
       if (resultLines.length > 20) {
         lines.push(
@@ -2024,12 +2133,15 @@ class GitComponent implements Component {
       lines.push(...this.renderBranchStatus(width));
       lines.push(theme.fg("dim", "─".repeat(width)));
       lines.push(
-        truncateToWidth(theme.fg(
-          "dim",
-          this.branchStatusLoading
-            ? "  esc quit"
-            : "  ↑↓ navigate • b branch diff • esc quit",
-        ), width),
+        truncateToWidth(
+          theme.fg(
+            "dim",
+            this.branchStatusLoading
+              ? "  esc quit"
+              : "  ↑↓ navigate • b branch diff • esc quit",
+          ),
+          width,
+        ),
       );
     } else if (this.phase === "diff-viewer") {
       // Split pane: left = diff, right = prompt editor
@@ -2042,12 +2154,27 @@ class GitComponent implements Component {
       const diffFocused = this.diffFocusPane === "diff";
       const currentFile = this.currentDiffFile();
       const fileLabel = currentFile ? ` │ ${currentFile}` : "";
-      const testsHiddenLabel = this.hideTests ? theme.fg("warning", " (tests hidden)") : "";
-      const wsHiddenLabel = this.hideWhitespace ? theme.fg("warning", " (ws hidden)") : "";
-      const filesHiddenLabel = this.hiddenFiles.size > 0 ? theme.fg("warning", ` (files hidden: ${this.hiddenFiles.size})`) : "";
+      const testsHiddenLabel = this.hideTests
+        ? theme.fg("warning", " (tests hidden)")
+        : "";
+      const wsHiddenLabel = this.hideWhitespace
+        ? theme.fg("warning", " (ws hidden)")
+        : "";
+      const filesHiddenLabel =
+        this.hiddenFiles.size > 0
+          ? theme.fg("warning", ` (files hidden: ${this.hiddenFiles.size})`)
+          : "";
       const diffHeader = diffFocused
-        ? theme.fg("accent", theme.bold(" ▶ Diff")) + testsHiddenLabel + wsHiddenLabel + filesHiddenLabel + theme.fg("muted", fileLabel)
-        : theme.fg("dim", "   Diff") + testsHiddenLabel + wsHiddenLabel + filesHiddenLabel + theme.fg("dim", fileLabel);
+        ? theme.fg("accent", theme.bold(" ▶ Diff")) +
+          testsHiddenLabel +
+          wsHiddenLabel +
+          filesHiddenLabel +
+          theme.fg("muted", fileLabel)
+        : theme.fg("dim", "   Diff") +
+          testsHiddenLabel +
+          wsHiddenLabel +
+          filesHiddenLabel +
+          theme.fg("dim", fileLabel);
       const promptHeader = !diffFocused
         ? theme.fg("accent", theme.bold(" ▶ Prompt"))
         : theme.fg("dim", "   Prompt");
@@ -2075,7 +2202,12 @@ class GitComponent implements Component {
       const diffEnd = Math.min(this.diffScrollOffset + availableLines, total);
       const leftLines: string[] = [];
       for (let i = this.diffScrollOffset; i < diffEnd; i++) {
-        leftLines.push(truncateToWidth(" " + this.sanitizeLine(this.activeDiffLines[i]), diffPaneWidth));
+        leftLines.push(
+          truncateToWidth(
+            " " + this.sanitizeLine(this.activeDiffLines[i]),
+            diffPaneWidth,
+          ),
+        );
       }
       // Pad diff pane
       for (let i = leftLines.length; i < availableLines; i++) {
@@ -2086,8 +2218,10 @@ class GitComponent implements Component {
       const promptContentWidth = promptPaneWidth - 1; // 1 char left margin
       this.promptContentWidth = promptContentWidth; // cache for input handlers
 
-      const { wrappedLines, wrapMap } = this.buildPromptWrapMap(promptContentWidth);
-      const { line: cursorWrappedLine, col: cursorWrappedCol } = this.promptCursorInWrapMap(wrapMap);
+      const { wrappedLines, wrapMap } =
+        this.buildPromptWrapMap(promptContentWidth);
+      const { line: cursorWrappedLine, col: cursorWrappedCol } =
+        this.promptCursorInWrapMap(wrapMap);
 
       // Ensure scroll keeps cursor visible
       if (cursorWrappedLine < this.promptScrollOffset) {
@@ -2122,7 +2256,9 @@ class GitComponent implements Component {
       // If prompt is empty and we're in prompt focus, show placeholder
       if (this.promptText === "" && !diffFocused) {
         rightLines[0] = truncateToWidth(
-          " " + theme.fg("dim", "Prompt pi for changes...") + `\x1b[7m \x1b[27m`,
+          " " +
+            theme.fg("dim", "Prompt pi for changes...") +
+            `\x1b[7m \x1b[27m`,
           promptPaneWidth,
         );
       } else if (this.promptText === "" && diffFocused) {
@@ -2158,7 +2294,10 @@ class GitComponent implements Component {
       lines.push(theme.fg("dim", "─".repeat(width)));
       const hideTestsHint = this.hideTests ? "t show tests" : "t hide tests";
       const hideWsHint = this.hideWhitespace ? "w show ws" : "w hide ws";
-      const hideFileHint = this.hiddenFiles.size > 0 ? "h hide file · H unhide all" : "h hide file";
+      const hideFileHint =
+        this.hiddenFiles.size > 0
+          ? "h hide file · H unhide all"
+          : "h hide file";
       const helpLeft = diffFocused
         ? `d↓ u↑ · g/G top/bottom · j/k scroll · f/F next/prev file · e edit · p path · x explain file · X explain diff · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`
         : `editing prompt (\\+enter=newline)`;
@@ -2166,7 +2305,10 @@ class GitComponent implements Component {
         ? `tab switch pane · enter send · esc back`
         : `tab switch pane · esc back`;
       lines.push(
-        truncateToWidth(theme.fg("dim", `  ${helpLeft}  │  ${helpRight}  ${position}`), width),
+        truncateToWidth(
+          theme.fg("dim", `  ${helpLeft}  │  ${helpRight}  ${position}`),
+          width,
+        ),
       );
 
       // Confirmation dialog overlay
@@ -2260,7 +2402,10 @@ class GitComponent implements Component {
 
     const baseLabel = this.branchBaseName || "base";
     lines.push(
-      theme.fg("muted", `  ${this.branchFiles.length} file(s) changed compared to ${baseLabel}:`),
+      theme.fg(
+        "muted",
+        `  ${this.branchFiles.length} file(s) changed compared to ${baseLabel}:`,
+      ),
     );
     lines.push("");
 
@@ -2272,7 +2417,10 @@ class GitComponent implements Component {
       this.scrollOffset = this.cursor - maxVisible + 1;
     }
 
-    const end = Math.min(this.scrollOffset + maxVisible, this.branchFiles.length);
+    const end = Math.min(
+      this.scrollOffset + maxVisible,
+      this.branchFiles.length,
+    );
 
     for (let i = this.scrollOffset; i < end; i++) {
       const file = this.branchFiles[i];
@@ -2283,19 +2431,26 @@ class GitComponent implements Component {
       let line: string;
       if (isCursor) {
         line =
-          theme.fg("accent", `  ${pointer} ${truncateToWidth(file.path, width - 20)} `) +
-          theme.fg("muted", `(${statusStr})`);
+          theme.fg(
+            "accent",
+            `  ${pointer} ${truncateToWidth(file.path, width - 20)} `,
+          ) + theme.fg("muted", `(${statusStr})`);
       } else {
         line =
-          theme.fg("dim", `  ${pointer} ${truncateToWidth(file.path, width - 20)} `) +
-          theme.fg("dim", `(${statusStr})`);
+          theme.fg(
+            "dim",
+            `  ${pointer} ${truncateToWidth(file.path, width - 20)} `,
+          ) + theme.fg("dim", `(${statusStr})`);
       }
       lines.push(truncateToWidth(line, width));
     }
 
     if (this.branchFiles.length > maxVisible) {
       lines.push(
-        theme.fg("dim", `  ${this.scrollOffset + 1}-${end} of ${this.branchFiles.length}`),
+        theme.fg(
+          "dim",
+          `  ${this.scrollOffset + 1}-${end} of ${this.branchFiles.length}`,
+        ),
       );
     }
 
@@ -2409,8 +2564,6 @@ export default function (pi: ExtensionAPI) {
           };
         },
       );
-
-
     },
   });
 }

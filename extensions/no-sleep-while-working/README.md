@@ -14,8 +14,8 @@ The `-d` flag is included because without it, USB wired network connections can 
 
 ## Events
 
-| Event | Action |
-|-------|--------|
-| `agent_start` | Spawns `caffeinate -i -d` |
-| `agent_end` | Kills `caffeinate` process |
+| Event              | Action                               |
+| ------------------ | ------------------------------------ |
+| `agent_start`      | Spawns `caffeinate -i -d`            |
+| `agent_end`        | Kills `caffeinate` process           |
 | `session_shutdown` | Kills `caffeinate` process (cleanup) |
