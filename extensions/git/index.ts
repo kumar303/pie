@@ -2006,8 +2006,18 @@ class GitComponent implements Component {
         this.onDone();
         return;
       }
-    } catch {
-      // Git status may fail if not in a repo
+    } catch (err: any) {
+      if (err.code === "ENOBUFS") {
+        const detail = err.stderr?.trim() || err.message;
+        this.ctx.ui.notify(
+          `Too many changed files for /git to display. ${detail}`,
+          "error",
+        );
+        this.onDone();
+        return;
+      }
+      const detail = err.stderr?.trim() || err.message;
+      this.ctx.ui.notify(`git status failed: ${detail}`, "error");
     }
     this.selected.clear();
     this.cursor = 0;
@@ -2542,36 +2552,36 @@ export default function (pi: ExtensionAPI) {
           cwd: process.cwd(),
         });
       } catch (err: any) {
-        ctx.ui.notify(
-          `git status failed: ${err.stderr?.trim() || err.message}`,
-          "error",
-        );
+        const detail = err.stderr?.trim() || err.message;
+        const msg =
+          err.code === "ENOBUFS"
+            ? `Too many changed files for /git to display. ${detail}`
+            : `git status failed: ${detail}`;
+        ctx.ui.notify(msg, "error");
         return;
       }
 
       const files = parseGitStatus(output);
 
-      await ctx.ui.custom<string | undefined>(
-        (tui, theme, _kb, done) => {
-          // Clear stale lines when switching from tall phases (diff viewer) to shorter ones
-          (tui as any).setClearOnShrink(true);
-          const component = new GitComponent(
-            files,
-            tui,
-            theme,
-            (prompt?: string) => done(prompt),
-            (text: string) => pi.sendUserMessage(text, { deliverAs: "steer" }),
-            ctx,
-          );
-          return {
-            render: (w: number) => component.render(w),
-            invalidate: () => component.invalidate(),
-            handleInput: (data: string) => {
-              component.handleInput(data);
-            },
-          };
-        },
-      );
+      await ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
+        // Clear stale lines when switching from tall phases (diff viewer) to shorter ones
+        (tui as any).setClearOnShrink(true);
+        const component = new GitComponent(
+          files,
+          tui,
+          theme,
+          (prompt?: string) => done(prompt),
+          (text: string) => pi.sendUserMessage(text, { deliverAs: "steer" }),
+          ctx,
+        );
+        return {
+          render: (w: number) => component.render(w),
+          invalidate: () => component.invalidate(),
+          handleInput: (data: string) => {
+            component.handleInput(data);
+          },
+        };
+      });
     },
   });
 }
