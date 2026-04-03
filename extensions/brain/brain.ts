@@ -30,6 +30,8 @@ const SPINNER_INTERVAL_MS = 100;
 export interface BrainComponentOptions {
   cwd?: string;
   cwdBranch?: string | null;
+  /** The session ID of the current pi instance. */
+  sessionId?: string;
   /** Called when sessions_changed is received to re-read session data. */
   readSessionsFn?: () => BrainData;
 }
@@ -43,6 +45,7 @@ export class BrainComponent implements Component {
   private readSessionsFn?: () => BrainData;
   private cwd: string;
   private cwdBranch: string | null;
+  private sessionId: string | null;
 
   private data: BrainData;
 
@@ -81,6 +84,7 @@ export class BrainComponent implements Component {
     this.readSessionsFn = options?.readSessionsFn;
     this.cwd = options?.cwd ?? process.cwd();
     this.cwdBranch = options?.cwdBranch ?? null;
+    this.sessionId = options?.sessionId ?? null;
     this.filteredToday = data.today;
     this.filteredEarlier = data.earlier;
 
@@ -171,6 +175,15 @@ export class BrainComponent implements Component {
     return this.unifiedList[this.cursor] ?? null;
   }
 
+  /** If the selected entry is the current session, just exit; otherwise open it. */
+  private openOrExit(dir: DirEntry): void {
+    if (this.sessionId && dir.sessionId === this.sessionId) {
+      this.onDone();
+    } else {
+      this.onOpenDir(dir);
+    }
+  }
+
   private refreshLog(): void {
     const dir = this.selectedDir();
     if (dir) {
@@ -222,7 +235,7 @@ export class BrainComponent implements Component {
     }
     if (matchesKey(data, Key.enter)) {
       const dir = this.selectedDir();
-      if (dir) this.onOpenDir(dir);
+      if (dir) this.openOrExit(dir);
       return;
     }
     if (matchesKey(data, Key.up)) {
@@ -313,7 +326,7 @@ export class BrainComponent implements Component {
     if (matchesKey(data, Key.enter)) {
       this.searchMode = false;
       const dir = this.selectedDir();
-      if (dir) this.onOpenDir(dir);
+      if (dir) this.openOrExit(dir);
       this.invalidate();
       this.tui.requestRender();
       return;

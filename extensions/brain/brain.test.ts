@@ -74,6 +74,7 @@ function createComponent(opts?: {
   onOpenDir?: (dir: DirEntry) => void;
   cwd?: string;
   cwdBranch?: string | null;
+  sessionId?: string;
 }) {
   const tui = makeTui();
   const theme = makeTheme();
@@ -93,6 +94,7 @@ function createComponent(opts?: {
       cwd: opts?.cwd ?? "/home/user/current-project",
       cwdBranch: opts?.cwdBranch ?? "main",
       readSessionsFn: opts?.readSessionsFn,
+      sessionId: opts?.sessionId,
     },
   );
   return { component, tui, onDone, onOpenDir, data };
@@ -647,6 +649,42 @@ describe("enter opens directory", () => {
     expect(onOpenDir).toHaveBeenCalledWith(
       expect.objectContaining({ dir: "/home/user/delta" }),
     );
+  });
+
+  it("exits instead of opening when selected dir is the current session", () => {
+    const { component, onOpenDir, onDone } = createComponent({
+      sessionId: "s1",
+    });
+    // Cursor starts on alpha which has sessionId "s1"
+    component.handleInput(ENTER);
+    expect(onOpenDir).not.toHaveBeenCalled();
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens other session in same directory instead of exiting", () => {
+    // Two sessions in /home/user/alpha: s1 (in the list) and our session
+    const { component, onOpenDir, onDone } = createComponent({
+      cwd: "/home/user/alpha",
+      sessionId: "other-session-same-dir",
+    });
+    // Cursor starts on alpha (sessionId "s1") — same dir, different session
+    component.handleInput(ENTER);
+    expect(onOpenDir).toHaveBeenCalledTimes(1);
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it("exits instead of opening current session via search", () => {
+    const { component, onOpenDir, onDone } = createComponent({
+      sessionId: "s1",
+    });
+    // Search for alpha and press enter
+    component.handleInput("/");
+    component.handleInput("a");
+    component.handleInput("l");
+    component.handleInput("p");
+    component.handleInput(ENTER);
+    expect(onOpenDir).not.toHaveBeenCalled();
+    expect(onDone).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -219,6 +219,7 @@ export default function (pi: ExtensionAPI) {
           {
             cwd: ctx.cwd,
             cwdBranch: getGitBranch(ctx.cwd),
+            sessionId: sessionId ?? undefined,
             readSessionsFn: () => readSessions(),
           },
         );
