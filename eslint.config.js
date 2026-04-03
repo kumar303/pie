@@ -14,10 +14,6 @@ export default tseslint.config(
       ],
       // Allow explicit `any` — strict mode is off in tsconfig
       "@typescript-eslint/no-explicit-any": "off",
-      // ANSI escape sequence handling uses control chars in regexes intentionally
-      "no-control-regex": "off",
-      // Allow require() for .js service files loaded at runtime
-      "@typescript-eslint/no-require-imports": "off",
     },
   },
   {

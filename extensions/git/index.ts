@@ -1046,9 +1046,11 @@ class GitComponent implements Component {
 
     // Bracketed paste: terminal wraps pasted content in \x1b[200~ ... \x1b[201~
     if (data.includes("\x1b[200~")) {
+      /* eslint-disable no-control-regex */
       const pasteContent = data
         .replace(/\x1b\[200~/g, "")
         .replace(/\x1b\[201~/g, "");
+      /* eslint-enable no-control-regex */
       if (pasteContent) {
         // Command input is single-line, strip newlines
         const cleaned = pasteContent.replace(/\r?\n/g, " ");
@@ -1149,6 +1151,7 @@ class GitComponent implements Component {
     // Strip ANSI codes for matching since diff output is colorized
     this.diffFileIndex = [];
     for (let i = 0; i < this.diffLines.length; i++) {
+      // eslint-disable-next-line no-control-regex
       const stripped = this.diffLines[i].replace(/\x1b\[[0-9;]*m/g, "");
       const match = stripped.match(/^diff --git a\/(.+?) b\/(.+)/);
       if (match) {
@@ -1818,9 +1821,11 @@ class GitComponent implements Component {
 
     // Bracketed paste: terminal wraps pasted content in \x1b[200~ ... \x1b[201~
     if (data.includes("\x1b[200~")) {
+      /* eslint-disable no-control-regex */
       const pasteContent = data
         .replace(/\x1b\[200~/g, "")
         .replace(/\x1b\[201~/g, "");
+      /* eslint-enable no-control-regex */
       if (pasteContent) {
         this.promptText =
           this.promptText.slice(0, this.promptCursor) +
@@ -1875,17 +1880,23 @@ class GitComponent implements Component {
       }
     }
     if (startLine < 0) return "";
-    return this.activeDiffLines
-      .slice(startLine, endLine)
-      .map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""))
-      .join("\n");
+    return (
+      this.activeDiffLines
+        .slice(startLine, endLine)
+        // eslint-disable-next-line no-control-regex
+        .map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""))
+        .join("\n")
+    );
   }
 
   /** Get the entire active (filtered) diff as plain text. */
   private getActiveDiffText(): string {
-    return this.activeDiffLines
-      .map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""))
-      .join("\n");
+    return (
+      this.activeDiffLines
+        // eslint-disable-next-line no-control-regex
+        .map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""))
+        .join("\n")
+    );
   }
 
   /** Get line/col of the prompt cursor (logical lines, split by \n) */

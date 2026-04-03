@@ -419,12 +419,14 @@ export class BrainComponent implements Component {
       line
         .replace(/\t/g, "  ")
         .replace(/\r/g, "")
+        /* eslint-disable no-control-regex */
         // CSI sequences (e.g. \x1b[2K, colors, cursor movement)
         .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
         // OSC sequences (e.g. \x1b]0;title\x07)
         .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g, "")
         // Remaining C0 control chars (except newline, already split by lines)
         .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, "")
+      /* eslint-enable no-control-regex */
     );
   }
 

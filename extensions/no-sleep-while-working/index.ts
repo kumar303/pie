@@ -12,15 +12,13 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { spawn } from "node:child_process";
 
 export default function (pi: ExtensionAPI) {
   let caffeinateController: AbortController | null = null;
 
   function startCaffeinate() {
     if (caffeinateController) return;
-
-    const { spawn } =
-      require("node:child_process") as typeof import("node:child_process");
 
     let proc: import("node:child_process").ChildProcess | undefined;
 
