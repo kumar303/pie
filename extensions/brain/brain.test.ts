@@ -1,6 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { BrainComponent } from "./brain.js";
-import { Key } from "@mariozechner/pi-tui";
 import type { BrainData, DirEntry } from "./store.js";
 import type { StatusMessage, ErrorMessage } from "./service.js";
 
@@ -483,10 +482,6 @@ describe("Panel B scroll", () => {
       readLogFn: () => logLines,
     });
     const lines = component.render(80).map(stripAnsi);
-    // Find content rows between the accent border and the bottom separator
-    const borderIdx = lines.findIndex(
-      (l) => l.includes("═") || /^[─═│]+$/.test(l.replace(/[^─═│]/g, "")),
-    );
     // Content rows start after the accent border (index 1) and end before the bottom separator
     const sepIdx = lines.findLastIndex((l) => /^─+$/.test(l.trim()));
     const contentRows = lines.slice(2, sepIdx);
@@ -774,7 +769,7 @@ describe("handleStatusMessage", () => {
 
   it("clears branch display when status message has null branch", () => {
     const { component } = createComponent();
-    let text = renderText(component);
+    const text = renderText(component);
     expect(text).toContain("alpha [main]");
 
     const msg: StatusMessage = {
@@ -785,7 +780,6 @@ describe("handleStatusMessage", () => {
       state: "idle",
     };
     component.handleStatusMessage(msg);
-    text = renderText(component);
     // alpha should no longer show [main]
     const lines = component.render(80).map(stripAnsi);
     const alphaLine = lines.find((l) => l.includes("alpha"));

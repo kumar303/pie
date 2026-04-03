@@ -20,7 +20,6 @@ import { homedir } from "node:os";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
-  ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
 import { complete, type UserMessage } from "@mariozechner/pi-ai";
 import {
@@ -44,7 +43,9 @@ function loadHistory(): string[] {
       const data = JSON.parse(readFileSync(HISTORY_FILE, "utf-8"));
       if (Array.isArray(data)) return data.slice(-MAX_HISTORY);
     }
-  } catch {}
+  } catch {
+    // History file may not exist or be corrupted
+  }
   return [];
 }
 
@@ -56,7 +57,9 @@ function saveHistory(history: string[]): void {
       JSON.stringify(history.slice(-MAX_HISTORY)),
       "utf-8",
     );
-  } catch {}
+  } catch {
+    // Best-effort persistence
+  }
 }
 
 // --- Parse git status output ---
@@ -426,7 +429,7 @@ class GitComponent implements Component {
     const selectedFiles = this.getSelectedFiles();
 
     // Gather diff for tracked files and content for untracked (selected) files
-    let diffParts: string[] = [];
+    const diffParts: string[] = [];
     const diffErrors: string[] = [];
 
     // Staged + unstaged diff for tracked selected files
@@ -1172,7 +1175,9 @@ class GitComponent implements Component {
         cwd: process.cwd(),
       });
       if (staged) diffOutput += staged;
-    } catch {}
+    } catch {
+      // No staged changes or git error
+    }
     try {
       const unstaged = execSync(`git diff --color${wsFlag}`, {
         encoding: "utf-8",
@@ -1180,7 +1185,9 @@ class GitComponent implements Component {
         cwd: process.cwd(),
       });
       if (unstaged) diffOutput += (diffOutput ? "\n" : "") + unstaged;
-    } catch {}
+    } catch {
+      // No unstaged changes or git error
+    }
 
     // Include untracked files as pseudo-diffs
     const untrackedFiles = getUntrackedFiles();
@@ -1198,7 +1205,9 @@ class GitComponent implements Component {
           .map((l) => `\x1b[32m+${l}\x1b[m`)
           .join("\n");
         diffOutput += (diffOutput ? "\n" : "") + header + coloredLines;
-      } catch {}
+      } catch {
+        // Skip files that can't be read (binary, permission, etc.)
+      }
     }
 
     return diffOutput;
@@ -1792,8 +1801,8 @@ class GitComponent implements Component {
       const lineEnd = lines[line].length;
       if (col < lineEnd) {
         // Kill to end of line
-        let pos = this.promptCursor;
-        let endPos = pos + (lineEnd - col);
+        const pos = this.promptCursor;
+        const endPos = pos + (lineEnd - col);
         this.promptText =
           this.promptText.slice(0, pos) + this.promptText.slice(endPos);
       } else if (this.promptCursor < this.promptText.length) {
@@ -1997,7 +2006,9 @@ class GitComponent implements Component {
         this.onDone();
         return;
       }
-    } catch {}
+    } catch {
+      // Git status may fail if not in a repo
+    }
     this.selected.clear();
     this.cursor = 0;
     this.scrollOffset = 0;
@@ -2335,13 +2346,10 @@ class GitComponent implements Component {
     const cur = this.cmdCursor;
 
     // Determine visible window with horizontal scrolling
-    let visStart = 0;
     let visCursor = cur;
+    let visStart = 0;
 
-    if (text.length <= w) {
-      // Everything fits
-      visStart = 0;
-    } else {
+    if (text.length > w) {
       const half = Math.floor(w / 2);
       if (cur < half) {
         visStart = 0;
@@ -2543,7 +2551,7 @@ export default function (pi: ExtensionAPI) {
 
       const files = parseGitStatus(output);
 
-      const promptText = await ctx.ui.custom<string | undefined>(
+      await ctx.ui.custom<string | undefined>(
         (tui, theme, _kb, done) => {
           // Clear stale lines when switching from tall phases (diff viewer) to shorter ones
           (tui as any).setClearOnShrink(true);

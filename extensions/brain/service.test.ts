@@ -42,7 +42,9 @@ afterEach(async () => {
   const sp = getSocketPath(tmpDir);
   try {
     if (existsSync(sp)) unlinkSync(sp);
-  } catch {}
+  } catch {
+    // Cleanup is best-effort
+  }
 });
 
 function socketPath(): string {

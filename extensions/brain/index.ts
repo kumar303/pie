@@ -22,7 +22,6 @@ import {
   readLog,
   appendLog,
   pruneOldSessions,
-  getDataDir,
   getGitBranch,
   type DirEntry,
 } from "./store.js";

@@ -7,6 +7,7 @@ Pi extensions repo. Do not commit changes to git automatically.
 - To develop an extension locally, run `pi -e ./extensions/<name>/`
 - All tests must pass: run `pnpm test` after changes and fix errors
 - All code must compile: run `pnpm run typecheck` and fix any errors
+- All code must pass linting: run `pnpm run lint` and fix any errors
 - After every change, run `pnpm run format` to reformat all files with Prettier
 - Use [conventional commits](https://www.conventionalcommits.org/): `feat(git): ...`, `fix(git): ...`, `docs: ...`, `chore: ...`
 - Update the README table when adding extensions
