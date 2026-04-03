@@ -877,8 +877,7 @@ class GitComponent implements Component {
       this.openBranchDiffViewer();
       return;
     }
-    // j/k or arrow keys to scroll
-    if (matchesKey(data, "j") || matchesKey(data, Key.down)) {
+    if (matchesKey(data, Key.down)) {
       if (this.cursor < this.branchFiles.length - 1) {
         this.cursor++;
         this.invalidate();
@@ -886,7 +885,7 @@ class GitComponent implements Component {
       }
       return;
     }
-    if (matchesKey(data, "k") || matchesKey(data, Key.up)) {
+    if (matchesKey(data, Key.up)) {
       if (this.cursor > 0) {
         this.cursor--;
         this.invalidate();
@@ -1435,8 +1434,7 @@ class GitComponent implements Component {
       this.tui.requestRender();
       return;
     }
-    // Arrow keys / j/k for single line scroll
-    if (matchesKey(data, Key.down) || matchesKey(data, "j")) {
+    if (matchesKey(data, Key.down)) {
       const maxScroll = Math.max(
         0,
         this.activeDiffLines.length - Math.max(5, 30),
@@ -1446,7 +1444,7 @@ class GitComponent implements Component {
       this.tui.requestRender();
       return;
     }
-    if (matchesKey(data, Key.up) || matchesKey(data, "k")) {
+    if (matchesKey(data, Key.up)) {
       this.diffScrollOffset = Math.max(0, this.diffScrollOffset - 1);
       this.invalidate();
       this.tui.requestRender();
@@ -2331,7 +2329,7 @@ class GitComponent implements Component {
           ? "h hide file · H unhide all"
           : "h hide file";
       const helpLeft = diffFocused
-        ? `d↓ u↑ · g/G top/bottom · j/k scroll · f/F next/prev file · e edit · p path · x explain file · X explain diff · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`
+        ? `d↓ u↑ · g/G top/bottom · ↑↓ scroll · f/F next/prev file · e edit · p path · x explain file · X explain diff · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`
         : `editing prompt (\\+enter=newline)`;
       const helpRight = this.promptText.trim()
         ? `tab switch pane · enter send · esc back`
