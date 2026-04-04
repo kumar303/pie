@@ -24,11 +24,17 @@ import type {
 import { complete, type UserMessage } from "@mariozechner/pi-ai";
 import {
   decodeKittyPrintable,
+  Editor,
+  type EditorTheme,
   Key,
   matchesKey,
   truncateToWidth,
   visibleWidth,
+  type AutocompleteItem,
+  type AutocompleteProvider,
+  type AutocompleteSuggestions,
   type Component,
+  type TUI,
 } from "@mariozechner/pi-tui";
 
 // --- History persistence ---
@@ -192,47 +198,109 @@ class GitComponent implements Component {
 
   // Diff viewer prompt pane (split view)
   private diffFocusPane: "diff" | "prompt" = "diff";
-  private promptText = "";
-  private promptCursor = 0;
-  private promptScrollOffset = 0;
   private confirmDiscard = false; // "discard prompt?" y/n confirmation
+  private promptEditor!: Editor;
+  private promptHistory: string[] = [];
 
   // TUI
-  private tui: { requestRender: () => void };
+  private tui: TUI;
   private theme: any;
   private onDone: (promptText?: string) => void;
   private sendPrompt: (text: string) => void;
+  private queueFollowUp: (text: string) => void;
   private ctx: ExtensionCommandContext;
-
-  // Prompt pane layout (set during render, used by input handlers)
-  private promptContentWidth = 0;
 
   // Caching
   private cachedLines?: string[];
   private cachedWidth?: number;
 
-  constructor(
-    files: GitFile[],
-    tui: { requestRender: () => void },
-    theme: any,
-    onDone: (promptText?: string) => void,
-    sendPrompt: (text: string) => void,
-    ctx: ExtensionCommandContext,
-  ) {
-    this.files = files;
-    this.tui = tui;
-    this.theme = theme;
-    this.onDone = onDone;
-    this.sendPrompt = sendPrompt;
-    this.ctx = ctx;
+  constructor(opts: {
+    files: GitFile[];
+    tui: TUI;
+    theme: any;
+    onDone: (promptText?: string) => void;
+    sendPrompt: (text: string) => void;
+    queueFollowUp: (text: string) => void;
+    ctx: ExtensionCommandContext;
+  }) {
+    this.files = opts.files;
+    this.tui = opts.tui;
+    this.theme = opts.theme;
+    this.onDone = opts.onDone;
+    this.sendPrompt = opts.sendPrompt;
+    this.queueFollowUp = opts.queueFollowUp;
+    this.ctx = opts.ctx;
     this.commandHistory = loadHistory();
     this.branch = this.getBranch();
+    this.initPromptEditor();
 
-    if (files.length === 0) {
+    if (this.files.length === 0) {
       this.phase = "branch-status";
       this.branchStatusLoading = true;
       this.loadBranchStatusAsync();
     }
+  }
+
+  private initPromptEditor(): void {
+    const editorTheme: EditorTheme = {
+      borderColor: (s: string) => this.theme.fg("accent", s),
+      selectList: {
+        selectedPrefix: (s: string) => this.theme.fg("accent", s),
+        selectedText: (s: string) => this.theme.fg("accent", s),
+        description: (s: string) => this.theme.fg("dim", s),
+        scrollInfo: (s: string) => this.theme.fg("dim", s),
+        noMatch: (s: string) => this.theme.fg("dim", s),
+      },
+    };
+    this.promptEditor = new Editor(this.tui, editorTheme, { paddingX: 0 });
+    this.promptEditor.focused = false;
+    this.promptEditor.onSubmit = (text: string) => {
+      this.submitPrompt(text);
+    };
+    this.promptEditor.setAutocompleteProvider(
+      new FilePathAutocompleteProvider(),
+    );
+  }
+
+  /** Process and send the prompt text, expanding placeholders. */
+  private submitPrompt(
+    raw: string,
+    mode: "immediate" | "followUp" = "immediate",
+  ): void {
+    let text = raw.trim();
+    if (!text) return;
+    if (text.includes("${__current_file_diff__}")) {
+      const file = this.currentDiffFile();
+      const fileDiff = file ? this.getFileDiff(file) : "(no file selected)";
+      text = text.split("${__current_file_diff__}").join(fileDiff);
+    }
+    if (text.includes("${__current_diff__}")) {
+      text = text.split("${__current_diff__}").join(this.getActiveDiffText());
+    }
+    if (mode === "followUp") {
+      this.queueFollowUp(text);
+    } else {
+      this.sendPrompt(text);
+    }
+    this.promptEditor.addToHistory(raw.trim());
+    this.promptHistory.push(raw.trim());
+    this.promptEditor.setText("");
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
+  /** Get the current prompt text from the editor. */
+  private getPromptText(): string {
+    return this.promptEditor.getText();
+  }
+
+  /** Insert text into the prompt editor at the cursor. */
+  private insertIntoPrompt(text: string): void {
+    this.promptEditor.insertTextAtCursor(text);
+    this.diffFocusPane = "prompt";
+    this.promptEditor.focused = true;
+    this.invalidate();
+    this.tui.requestRender();
   }
 
   private getBranch(): string {
@@ -1143,7 +1211,8 @@ class GitComponent implements Component {
     this.diffLines = diffOutput.split("\n");
     this.diffScrollOffset = 0;
     this.diffFocusPane = "diff";
-    this.promptScrollOffset = 0;
+    this.promptEditor.setText("");
+    this.promptEditor.focused = false;
     this.confirmDiscard = false;
 
     // Build file index from diff output - parse "diff --git a/... b/..." lines
@@ -1346,9 +1415,7 @@ class GitComponent implements Component {
     // Handle y/n confirmation for discarding prompt
     if (this.confirmDiscard) {
       if (matchesKey(data, "y")) {
-        this.promptText = "";
-        this.promptCursor = 0;
-        this.promptScrollOffset = 0;
+        this.promptEditor.setText("");
         this.confirmDiscard = false;
         this.onDone();
       } else if (matchesKey(data, "n") || matchesKey(data, Key.escape)) {
@@ -1359,17 +1426,30 @@ class GitComponent implements Component {
       return;
     }
 
-    // Tab: switch focus between diff and prompt panes
-    if (matchesKey(data, Key.tab)) {
-      this.diffFocusPane = this.diffFocusPane === "diff" ? "prompt" : "diff";
+    // Tab: switch focus to prompt when in diff pane
+    if (matchesKey(data, Key.tab) && this.diffFocusPane === "diff") {
+      this.diffFocusPane = "prompt";
+      this.promptEditor.focused = true;
       this.invalidate();
       this.tui.requestRender();
       return;
     }
 
-    // Escape: exit extension (with confirmation if prompt has text)
+    // Escape: if in prompt pane, switch back to diff; otherwise exit
     if (matchesKey(data, Key.escape)) {
-      if (this.promptText.trim()) {
+      if (this.diffFocusPane === "prompt") {
+        // If the Editor is showing autocomplete, let it handle Escape first
+        if (this.promptEditor.isShowingAutocomplete()) {
+          this.promptEditor.handleInput(data);
+          this.invalidate();
+          this.tui.requestRender();
+          return;
+        }
+        this.diffFocusPane = "diff";
+        this.promptEditor.focused = false;
+        this.invalidate();
+        this.tui.requestRender();
+      } else if (this.getPromptText().trim()) {
         this.confirmDiscard = true;
         this.invalidate();
         this.tui.requestRender();
@@ -1380,7 +1460,7 @@ class GitComponent implements Component {
     }
     // 'q' only quits when diff pane is focused (not when typing in prompt)
     if (matchesKey(data, "q") && this.diffFocusPane === "diff") {
-      if (this.promptText.trim()) {
+      if (this.getPromptText().trim()) {
         this.confirmDiscard = true;
         this.invalidate();
         this.tui.requestRender();
@@ -1393,7 +1473,27 @@ class GitComponent implements Component {
     if (this.diffFocusPane === "diff") {
       this.handleDiffPaneInput(data);
     } else {
-      this.handlePromptPaneInput(data);
+      // Ctrl+C in prompt pane: clear text and switch back to diff
+      if (matchesKey(data, Key.ctrl("c"))) {
+        this.promptEditor.setText("");
+        this.diffFocusPane = "diff";
+        this.promptEditor.focused = false;
+        this.invalidate();
+        this.tui.requestRender();
+        return;
+      }
+      // Alt+Enter: queue prompt as follow-up instead of sending immediately
+      if (matchesKey(data, Key.alt("enter"))) {
+        const text = this.getPromptText();
+        if (text.trim()) {
+          this.submitPrompt(text, "followUp");
+        }
+        return;
+      }
+      // Delegate to the native Editor for all prompt input
+      this.promptEditor.handleInput(data);
+      this.invalidate();
+      this.tui.requestRender();
     }
   }
 
@@ -1583,269 +1683,26 @@ class GitComponent implements Component {
         this.ctx.ui.notify("No file at current scroll position", "error");
         return;
       }
-      const prefix = this.promptText.trim() ? "\n\n" : "";
-      const insertion = prefix + "\n\n" + file;
-      this.promptText =
-        this.promptText.slice(0, this.promptCursor) +
-        insertion +
-        this.promptText.slice(this.promptCursor);
-      this.promptCursor += prefix.length;
-      this.diffFocusPane = "prompt";
-      this.invalidate();
-      this.tui.requestRender();
+      const sep = this.getPromptText().trim() ? "\n\n" : "";
+      this.insertIntoPrompt(sep + file + "\n\n");
       return;
     }
-    // x = explain current file's changes (inserts placeholder replaced on send)
+    // x = explain current file's changes
     if (matchesKey(data, "x")) {
       const file = this.currentDiffFile();
       if (!file) {
         this.ctx.ui.notify("No file at current scroll position", "error");
         return;
       }
-      const prefix = this.promptText.trim() ? "\n\n" : "";
-      const preamble = prefix + "Explain these changes:";
-      const insertion = preamble + "\n\n${__current_file_diff__}";
-      this.promptText =
-        this.promptText.slice(0, this.promptCursor) +
-        insertion +
-        this.promptText.slice(this.promptCursor);
-      this.promptCursor += preamble.length;
-      this.diffFocusPane = "prompt";
-      this.invalidate();
-      this.tui.requestRender();
+      const sep = this.getPromptText().trim() ? "\n\n" : "";
+      this.insertIntoPrompt(sep + "${__current_file_diff__}\n\n");
       return;
     }
-    // X = explain entire visible diff (inserts placeholder replaced on send)
+    // X = explain entire visible diff
     if (matchesKey(data, Key.shift("x"))) {
-      const prefix = this.promptText.trim() ? "\n\n" : "";
-      const preamble = prefix + "Explain these changes:";
-      const insertion = preamble + "\n\n${__current_diff__}";
-      this.promptText =
-        this.promptText.slice(0, this.promptCursor) +
-        insertion +
-        this.promptText.slice(this.promptCursor);
-      this.promptCursor += preamble.length;
-      this.diffFocusPane = "prompt";
-      this.invalidate();
-      this.tui.requestRender();
+      const sep = this.getPromptText().trim() ? "\n\n" : "";
+      this.insertIntoPrompt(sep + "${__current_diff__}\n\n");
       return;
-    }
-  }
-
-  private handlePromptPaneInput(data: string): void {
-    // Enter: send prompt to pi in background and clear, staying in diff viewer
-    // If the character before the cursor is '\', replace it with a newline instead
-    if (matchesKey(data, Key.enter)) {
-      if (
-        this.promptCursor > 0 &&
-        this.promptText[this.promptCursor - 1] === "\\"
-      ) {
-        // Replace trailing backslash with newline
-        this.promptText =
-          this.promptText.slice(0, this.promptCursor - 1) +
-          "\n" +
-          this.promptText.slice(this.promptCursor);
-        // cursor stays at same position (backslash replaced by newline)
-        this.invalidate();
-        this.tui.requestRender();
-      } else if (this.promptText.trim()) {
-        // Replace diff placeholders before sending
-        let text = this.promptText.trim();
-        if (text.includes("${__current_file_diff__}")) {
-          const file = this.currentDiffFile();
-          const fileDiff = file ? this.getFileDiff(file) : "(no file selected)";
-          text = text.split("${__current_file_diff__}").join(fileDiff);
-        }
-        if (text.includes("${__current_diff__}")) {
-          text = text
-            .split("${__current_diff__}")
-            .join(this.getActiveDiffText());
-        }
-        this.sendPrompt(text);
-        this.promptText = "";
-        this.promptCursor = 0;
-        this.promptScrollOffset = 0;
-        this.invalidate();
-        this.tui.requestRender();
-      }
-      return;
-    }
-
-    // Option+Left: move cursor to previous word boundary
-    if (matchesKey(data, Key.alt("left"))) {
-      this.promptCursor = this.promptWordBoundaryLeft(this.promptCursor);
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-    // Option+Right: move cursor to next word boundary
-    if (matchesKey(data, Key.alt("right"))) {
-      this.promptCursor = this.promptWordBoundaryRight(this.promptCursor);
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-    // Option+Delete (alt+backspace): delete previous word
-    // On macOS, option+delete sends \x17 (same as Ctrl+W) in legacy mode
-    if (matchesKey(data, Key.alt("backspace")) || data === "\x17") {
-      const boundary = this.promptWordBoundaryLeft(this.promptCursor);
-      if (boundary < this.promptCursor) {
-        this.promptText =
-          this.promptText.slice(0, boundary) +
-          this.promptText.slice(this.promptCursor);
-        this.promptCursor = boundary;
-        this.invalidate();
-        this.tui.requestRender();
-      }
-      return;
-    }
-
-    // Arrow keys for cursor movement
-    if (matchesKey(data, Key.left)) {
-      if (this.promptCursor > 0) this.promptCursor--;
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-    if (matchesKey(data, Key.right)) {
-      if (this.promptCursor < this.promptText.length) this.promptCursor++;
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-    if (matchesKey(data, Key.up)) {
-      // Move cursor up one visual (word-wrapped) line
-      const contentWidth = this.promptContentWidth;
-      if (contentWidth <= 0) return;
-      const { wrapMap } = this.buildPromptWrapMap(contentWidth);
-      const { line, col } = this.promptCursorInWrapMap(wrapMap);
-      if (line > 0) {
-        const prevLine = wrapMap[line - 1];
-        const newCol = Math.min(col, prevLine.length);
-        this.promptCursor = prevLine.textOffset + newCol;
-        this.invalidate();
-        this.tui.requestRender();
-      }
-      return;
-    }
-    if (matchesKey(data, Key.down)) {
-      // Move cursor down one visual (word-wrapped) line
-      const contentWidth = this.promptContentWidth;
-      if (contentWidth <= 0) return;
-      const { wrapMap } = this.buildPromptWrapMap(contentWidth);
-      const { line, col } = this.promptCursorInWrapMap(wrapMap);
-      if (line < wrapMap.length - 1) {
-        const nextLine = wrapMap[line + 1];
-        const newCol = Math.min(col, nextLine.length);
-        this.promptCursor = nextLine.textOffset + newCol;
-        this.invalidate();
-        this.tui.requestRender();
-      }
-      return;
-    }
-
-    // Home / Ctrl+A
-    if (matchesKey(data, Key.home) || matchesKey(data, Key.ctrl("a"))) {
-      // Move to start of current line
-      const { line } = this.promptCursorPosition();
-      const lines = this.promptText.split("\n");
-      let newPos = 0;
-      for (let i = 0; i < line; i++) newPos += lines[i].length + 1;
-      this.promptCursor = newPos;
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-
-    // End / Ctrl+E
-    if (matchesKey(data, Key.end) || matchesKey(data, Key.ctrl("e"))) {
-      const { line } = this.promptCursorPosition();
-      const lines = this.promptText.split("\n");
-      let newPos = 0;
-      for (let i = 0; i < line; i++) newPos += lines[i].length + 1;
-      newPos += lines[line].length;
-      this.promptCursor = newPos;
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-
-    // Backspace
-    if (matchesKey(data, Key.backspace)) {
-      if (this.promptCursor > 0) {
-        this.promptText =
-          this.promptText.slice(0, this.promptCursor - 1) +
-          this.promptText.slice(this.promptCursor);
-        this.promptCursor--;
-        this.invalidate();
-        this.tui.requestRender();
-      }
-      return;
-    }
-
-    // Delete
-    if (matchesKey(data, Key.delete)) {
-      if (this.promptCursor < this.promptText.length) {
-        this.promptText =
-          this.promptText.slice(0, this.promptCursor) +
-          this.promptText.slice(this.promptCursor + 1);
-        this.invalidate();
-        this.tui.requestRender();
-      }
-      return;
-    }
-
-    // Kill to end of line (Ctrl+K)
-    if (matchesKey(data, Key.ctrl("k"))) {
-      const { line, col } = this.promptCursorPosition();
-      const lines = this.promptText.split("\n");
-      const lineEnd = lines[line].length;
-      if (col < lineEnd) {
-        // Kill to end of line
-        const pos = this.promptCursor;
-        const endPos = pos + (lineEnd - col);
-        this.promptText =
-          this.promptText.slice(0, pos) + this.promptText.slice(endPos);
-      } else if (this.promptCursor < this.promptText.length) {
-        // At end of line: join with next line (delete the newline)
-        this.promptText =
-          this.promptText.slice(0, this.promptCursor) +
-          this.promptText.slice(this.promptCursor + 1);
-      }
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-
-    // Bracketed paste: terminal wraps pasted content in \x1b[200~ ... \x1b[201~
-    if (data.includes("\x1b[200~")) {
-      /* eslint-disable no-control-regex */
-      const pasteContent = data
-        .replace(/\x1b\[200~/g, "")
-        .replace(/\x1b\[201~/g, "");
-      /* eslint-enable no-control-regex */
-      if (pasteContent) {
-        this.promptText =
-          this.promptText.slice(0, this.promptCursor) +
-          pasteContent +
-          this.promptText.slice(this.promptCursor);
-        this.promptCursor += pasteContent.length;
-        this.invalidate();
-        this.tui.requestRender();
-      }
-      return;
-    }
-
-    // Printable character input
-    const ch = this.dataToPrintable(data);
-    if (ch) {
-      this.promptText =
-        this.promptText.slice(0, this.promptCursor) +
-        ch +
-        this.promptText.slice(this.promptCursor);
-      this.promptCursor += ch.length;
-      this.invalidate();
-      this.tui.requestRender();
     }
   }
 
@@ -1897,111 +1754,6 @@ class GitComponent implements Component {
     );
   }
 
-  /** Get line/col of the prompt cursor (logical lines, split by \n) */
-  private promptCursorPosition(): { line: number; col: number } {
-    const before = this.promptText.slice(0, this.promptCursor);
-    const lines = before.split("\n");
-    return { line: lines.length - 1, col: lines[lines.length - 1].length };
-  }
-
-  /** Build the wrap map for the prompt text given content width.
-   *  Each entry maps a visual (wrapped) line to a range in the original text. */
-  private buildPromptWrapMap(contentWidth: number): {
-    wrappedLines: string[];
-    wrapMap: { textOffset: number; length: number }[];
-  } {
-    const wrappedLines: string[] = [];
-    const wrapMap: { textOffset: number; length: number }[] = [];
-
-    if (this.promptText.length === 0) {
-      wrappedLines.push("");
-      wrapMap.push({ textOffset: 0, length: 0 });
-      return { wrappedLines, wrapMap };
-    }
-
-    const rawLines = this.promptText.split("\n");
-    let textOffset = 0;
-    for (const rawLine of rawLines) {
-      if (rawLine.length <= contentWidth) {
-        wrappedLines.push(rawLine);
-        wrapMap.push({ textOffset, length: rawLine.length });
-      } else {
-        // Word-wrap long lines
-        let pos = 0;
-        while (pos < rawLine.length) {
-          let end = pos + contentWidth;
-          if (end >= rawLine.length) {
-            end = rawLine.length;
-          } else {
-            // Try to break at a word boundary
-            let breakAt = end;
-            while (breakAt > pos && rawLine[breakAt] !== " ") breakAt--;
-            if (breakAt > pos) {
-              end = breakAt + 1; // include the space at end of this line
-            }
-            // else: no word boundary found, hard break at contentWidth
-          }
-          const segment = rawLine.slice(pos, end);
-          wrappedLines.push(segment);
-          wrapMap.push({
-            textOffset: textOffset + pos,
-            length: segment.length,
-          });
-          pos = end;
-        }
-      }
-      textOffset += rawLine.length + 1; // +1 for \n
-    }
-
-    return { wrappedLines, wrapMap };
-  }
-
-  /** Find the cursor's position in wrapped visual lines */
-  private promptCursorInWrapMap(
-    wrapMap: { textOffset: number; length: number }[],
-  ): { line: number; col: number } {
-    let remaining = this.promptCursor;
-    for (let i = 0; i < wrapMap.length; i++) {
-      const { length } = wrapMap[i];
-      if (remaining <= length || i === wrapMap.length - 1) {
-        return { line: i, col: Math.min(remaining, length) };
-      }
-      remaining -= length;
-      // If this visual line ends at a newline in the original text, consume it
-      const lineEndOffset = wrapMap[i].textOffset + length;
-      if (
-        lineEndOffset < this.promptText.length &&
-        this.promptText[lineEndOffset] === "\n"
-      ) {
-        remaining--;
-      }
-    }
-    return { line: 0, col: 0 };
-  }
-
-  /** Find previous word boundary (for option+left / option+delete) */
-  private promptWordBoundaryLeft(pos: number): number {
-    if (pos <= 0) return 0;
-    let i = pos - 1;
-    // Skip whitespace/punctuation
-    while (i > 0 && !/\w/.test(this.promptText[i])) i--;
-    // Skip word chars
-    while (i > 0 && /\w/.test(this.promptText[i - 1])) i--;
-    return i;
-  }
-
-  /** Find next word boundary (for option+right) */
-  private promptWordBoundaryRight(pos: number): number {
-    const len = this.promptText.length;
-    if (pos >= len) return len;
-    let i = pos;
-    // Skip word chars
-    while (i < len && /\w/.test(this.promptText[i])) i++;
-    // Skip whitespace/punctuation
-    while (i < len && !/\w/.test(this.promptText[i])) i++;
-    return i;
-  }
-
   private refreshStatus(): void {
     this.branch = this.getBranch();
     try {
@@ -2043,7 +1795,13 @@ class GitComponent implements Component {
   }
 
   render(width: number): string[] {
-    if (this.cachedLines && this.cachedWidth === width) {
+    // Don't use cache in diff-viewer phase — the embedded Editor can
+    // update asynchronously (e.g. autocomplete results arriving).
+    if (
+      this.cachedLines &&
+      this.cachedWidth === width &&
+      this.phase !== "diff-viewer"
+    ) {
       return this.cachedLines;
     }
 
@@ -2244,58 +2002,26 @@ class GitComponent implements Component {
         leftLines.push("");
       }
 
-      // Build prompt lines for right pane with word wrapping
-      const promptContentWidth = promptPaneWidth - 1; // 1 char left margin
-      this.promptContentWidth = promptContentWidth; // cache for input handlers
-
-      const { wrappedLines, wrapMap } =
-        this.buildPromptWrapMap(promptContentWidth);
-      const { line: cursorWrappedLine, col: cursorWrappedCol } =
-        this.promptCursorInWrapMap(wrapMap);
-
-      // Ensure scroll keeps cursor visible
-      if (cursorWrappedLine < this.promptScrollOffset) {
-        this.promptScrollOffset = cursorWrappedLine;
-      } else if (
-        cursorWrappedLine >=
-        this.promptScrollOffset + availableLines
-      ) {
-        this.promptScrollOffset = cursorWrappedLine - availableLines + 1;
-      }
-
+      // Build prompt lines using the native Editor component
+      this.promptEditor.focused = this.diffFocusPane === "prompt";
+      const editorRendered = this.promptEditor.render(promptPaneWidth);
+      // Strip the Editor's own top/bottom border lines — the split pane has its own
+      const editorContent = editorRendered.slice(1, -1);
       const rightLines: string[] = [];
-      const promptEnd = Math.min(
-        this.promptScrollOffset + availableLines,
-        wrappedLines.length,
-      );
 
-      for (let i = this.promptScrollOffset; i < promptEnd; i++) {
-        let lineText = wrappedLines[i];
-        if (!diffFocused && i === cursorWrappedLine) {
-          // Render cursor on this line
-          const col = cursorWrappedCol;
-          const before = lineText.slice(0, col);
-          const atCursor = col < lineText.length ? lineText[col] : " ";
-          const after = col < lineText.length ? lineText.slice(col + 1) : "";
-          const cursorChar = `\x1b[7m${atCursor}\x1b[27m`;
-          lineText = before + cursorChar + after;
+      // If prompt is empty and diff pane is focused, show placeholder;
+      // otherwise show the Editor (which renders the cursor)
+      if (this.getPromptText() === "" && diffFocused) {
+        const placeholder = theme.fg("dim", "Prompt pi for changes...");
+        rightLines.push(truncateToWidth(" " + placeholder, promptPaneWidth));
+      } else {
+        for (
+          let i = 0;
+          i < Math.min(editorContent.length, availableLines);
+          i++
+        ) {
+          rightLines.push(truncateToWidth(editorContent[i], promptPaneWidth));
         }
-        rightLines.push(truncateToWidth(" " + lineText, promptPaneWidth));
-      }
-
-      // If prompt is empty and we're in prompt focus, show placeholder
-      if (this.promptText === "" && !diffFocused) {
-        rightLines[0] = truncateToWidth(
-          " " +
-            theme.fg("dim", "Prompt pi for changes...") +
-            `\x1b[7m \x1b[27m`,
-          promptPaneWidth,
-        );
-      } else if (this.promptText === "" && diffFocused) {
-        rightLines[0] = truncateToWidth(
-          " " + theme.fg("dim", "Prompt pi for changes..."),
-          promptPaneWidth,
-        );
       }
 
       // Pad prompt pane
@@ -2328,18 +2054,15 @@ class GitComponent implements Component {
         this.hiddenFiles.size > 0
           ? "h hide file · H unhide all"
           : "h hide file";
-      const helpLeft = diffFocused
-        ? `d↓ u↑ · g/G top/bottom · ↑↓ scroll · f/F next/prev file · e edit · p path · x explain file · X explain diff · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`
-        : `editing prompt (\\+enter=newline)`;
-      const helpRight = this.promptText.trim()
-        ? `tab switch pane · enter send · esc back`
-        : `tab switch pane · esc back`;
-      lines.push(
-        truncateToWidth(
-          theme.fg("dim", `  ${helpLeft}  │  ${helpRight}  ${position}`),
-          width,
-        ),
-      );
+      let legend: string;
+      if (diffFocused) {
+        const helpLeft = `d↓ u↑ · g/G top/bottom · ↑↓ scroll · f/F next/prev file · e edit · p path · x explain file · X explain diff · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`;
+        legend = `  ${helpLeft}  │  tab prompt · esc quit  ${position}`;
+      } else {
+        const hints = `enter send · opt+enter follow-up · \\+enter newline · tab complete · ↑↓ history · ^C clear · esc back`;
+        legend = `  ${hints}`;
+      }
+      lines.push(truncateToWidth(theme.fg("dim", legend), width));
 
       // Confirmation dialog overlay
       if (this.confirmDiscard) {
@@ -2542,6 +2265,67 @@ class GitComponent implements Component {
   }
 }
 
+// --- File path autocomplete provider ---
+
+export class FilePathAutocompleteProvider implements AutocompleteProvider {
+  async getSuggestions(
+    lines: string[],
+    cursorLine: number,
+    cursorCol: number,
+    _options: { signal: AbortSignal; force?: boolean },
+  ): Promise<AutocompleteSuggestions | null> {
+    // Extract the word at cursor that looks like a file path
+    const line = lines[cursorLine] || "";
+    const before = line.slice(0, cursorCol);
+    // Match a path-like prefix: starts after whitespace or start of line
+    const match = before.match(/(?:^|\s)([\w.@\-/][\w.@\-/]*)$/);
+    if (!match) return null;
+    const prefix = match[1];
+    if (prefix.length < 2) return null;
+    // Strip leading ./ — git ls-files returns paths without it
+    const strippedPrefix = prefix.replace(/^\.\//, "");
+
+    try {
+      const escaped = strippedPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const output = execSync(
+        `git ls-files --cached --others --exclude-standard 2>/dev/null | grep -i "^${escaped}" | head -20`,
+        { encoding: "utf-8", timeout: 3000, cwd: process.cwd() },
+      );
+      const matches = output.split("\n").filter((f) => f.trim());
+      if (matches.length === 0) return null;
+      return {
+        prefix,
+        items: matches.slice(0, 20).map((f) => ({
+          value: f,
+          label: f,
+        })),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  applyCompletion(
+    lines: string[],
+    cursorLine: number,
+    cursorCol: number,
+    item: AutocompleteItem,
+    prefix: string,
+  ): { lines: string[]; cursorLine: number; cursorCol: number } {
+    const line = lines[cursorLine] || "";
+    const prefixStart = cursorCol - prefix.length;
+    const newLine =
+      line.slice(0, prefixStart) + item.value + line.slice(cursorCol);
+    const newLines = [...lines];
+    newLines[cursorLine] = newLine;
+    return {
+      lines: newLines,
+      cursorLine,
+      cursorCol: prefixStart + item.value.length,
+    };
+  }
+}
+
 // --- Extension entry point ---
 
 export default function (pi: ExtensionAPI) {
@@ -2575,14 +2359,17 @@ export default function (pi: ExtensionAPI) {
       await ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
         // Clear stale lines when switching from tall phases (diff viewer) to shorter ones
         (tui as any).setClearOnShrink(true);
-        const component = new GitComponent(
+        const component = new GitComponent({
           files,
           tui,
           theme,
-          (prompt?: string) => done(prompt),
-          (text: string) => pi.sendUserMessage(text, { deliverAs: "steer" }),
+          onDone: (prompt?: string) => done(prompt),
+          sendPrompt: (text: string) =>
+            pi.sendUserMessage(text, { deliverAs: "steer" }),
+          queueFollowUp: (text: string) =>
+            pi.sendUserMessage(text, { deliverAs: "followUp" }),
           ctx,
-        );
+        });
         return {
           render: (w: number) => component.render(w),
           invalidate: () => component.invalidate(),

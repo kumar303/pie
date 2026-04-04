@@ -25,7 +25,7 @@ import {
   getGitBranch,
   type DirEntry,
 } from "./store.js";
-import { BrainComponent } from "./brain.js";
+import { BrainComponent } from "./brain.ts";
 import { ensureService, type Client, type PubSubMessage } from "./service.js";
 
 export default function (pi: ExtensionAPI) {

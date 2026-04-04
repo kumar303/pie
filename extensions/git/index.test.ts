@@ -225,8 +225,8 @@ describe("diff gathering file categorization", () => {
   });
 });
 
-// Mirrors getUntrackedFiles from index.ts.
 import { execSync } from "node:child_process";
+import { FilePathAutocompleteProvider } from "./index.ts";
 
 function getUntrackedFiles(): string[] {
   try {
@@ -304,5 +304,145 @@ describe("getUntrackedFiles", () => {
   it("returns empty array when no untracked files", () => {
     const result = getUntrackedFiles();
     expect(result).toEqual([]);
+  });
+});
+
+// --- FilePathAutocompleteProvider ---
+
+describe("FilePathAutocompleteProvider", () => {
+  let tmpDir: string;
+  let origCwd: string;
+  let provider: FilePathAutocompleteProvider;
+  const signal = new AbortController().signal;
+
+  beforeEach(() => {
+    origCwd = process.cwd();
+    tmpDir = mkdtempSync(join(tmpdir(), "git-autocomplete-"));
+    execSync("git init", { cwd: tmpDir });
+    execSync("git config user.email test@test.com", { cwd: tmpDir });
+    execSync("git config user.name Test", { cwd: tmpDir });
+    mkdirSync(join(tmpDir, "src"), { recursive: true });
+    writeFileSync(join(tmpDir, "src/app.ts"), "export default {}");
+    writeFileSync(join(tmpDir, "src/utils.ts"), "export {}");
+    writeFileSync(join(tmpDir, "README.md"), "# test");
+    execSync("git add . && git commit -m init", { cwd: tmpDir });
+    process.chdir(tmpDir);
+    provider = new FilePathAutocompleteProvider();
+  });
+
+  afterEach(() => {
+    process.chdir(origCwd);
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns null when prefix is too short", async () => {
+    const result = await provider.getSuggestions(["s"], 0, 1, { signal });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when no path-like prefix at cursor", async () => {
+    const result = await provider.getSuggestions(["  "], 0, 2, { signal });
+    expect(result).toBeNull();
+  });
+
+  it("suggests matching files for a prefix", async () => {
+    const result = await provider.getSuggestions(["src/ap"], 0, 6, { signal });
+    expect(result).not.toBeNull();
+    expect(result!.prefix).toBe("src/ap");
+    expect(result!.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "src/app.ts" }),
+      ]),
+    );
+  });
+
+  it("returns null when no files match", async () => {
+    const result = await provider.getSuggestions(["nonexistent/path"], 0, 16, {
+      signal,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("matches prefix in the middle of a line", async () => {
+    const result = await provider.getSuggestions(["look at src/ut"], 0, 14, {
+      signal,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.prefix).toBe("src/ut");
+    expect(result!.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "src/utils.ts" }),
+      ]),
+    );
+  });
+
+  it("applies completion by replacing prefix with full path", () => {
+    const result = provider.applyCompletion(
+      ["look at src/ap"],
+      0,
+      14,
+      { value: "src/app.ts", label: "src/app.ts" },
+      "src/ap",
+    );
+    expect(result.lines[0]).toBe("look at src/app.ts");
+    expect(result.cursorCol).toBe(18);
+  });
+
+  it("matches ./ relative path prefix", async () => {
+    const result = await provider.getSuggestions(["./src/ap"], 0, 8, {
+      signal,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "src/app.ts" }),
+      ]),
+    );
+  });
+
+  it("matches when relevant files are beyond the first few git results", async () => {
+    // Create many files that sort before the target alphabetically
+    mkdirSync(join(tmpDir, "aaa"), { recursive: true });
+    for (let i = 0; i < 10; i++) {
+      writeFileSync(join(tmpDir, `aaa/file${i}.ts`), "x");
+    }
+    mkdirSync(join(tmpDir, "zzz"), { recursive: true });
+    writeFileSync(join(tmpDir, "zzz/target.ts"), "x");
+    execSync("git add .", { cwd: tmpDir });
+    const result = await provider.getSuggestions(["zzz/ta"], 0, 6, {
+      signal,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "zzz/target.ts" }),
+      ]),
+    );
+  });
+
+  it("only matches files starting with the prefix, not containing it", async () => {
+    mkdirSync(join(tmpDir, "lib"), { recursive: true });
+    writeFileSync(join(tmpDir, "lib/extension.ts"), "x");
+    execSync("git add .", { cwd: tmpDir });
+    // Typing "ext" should not match "lib/extension.ts"
+    const result = await provider.getSuggestions(["ext"], 0, 3, { signal });
+    if (result) {
+      const values = result.items.map((i) => i.value);
+      expect(values).not.toContain("lib/extension.ts");
+    }
+  });
+
+  it("matches files starting with special characters", async () => {
+    writeFileSync(join(tmpDir, ".eslintrc.js"), "module.exports = {}");
+    execSync("git add .eslintrc.js", { cwd: tmpDir });
+    const result = await provider.getSuggestions([".eslint"], 0, 7, {
+      signal,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: ".eslintrc.js" }),
+      ]),
+    );
   });
 });

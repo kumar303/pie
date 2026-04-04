@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { BrainComponent } from "./brain.js";
+import { BrainComponent } from "./brain.ts";
 import type { BrainData, DirEntry } from "./store.js";
 import type { StatusMessage, ErrorMessage } from "./service.js";
 
