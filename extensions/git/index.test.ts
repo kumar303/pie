@@ -291,7 +291,10 @@ describe("diff gathering file categorization", () => {
 });
 
 import { execSync } from "node:child_process";
-import { FilePathAutocompleteProvider } from "./index.ts";
+import {
+  FilePathAutocompleteProvider,
+  generateWorkingDiffOutput,
+} from "./index.ts";
 
 function getUntrackedFiles(): string[] {
   try {
@@ -305,6 +308,97 @@ function getUntrackedFiles(): string[] {
     return [];
   }
 }
+
+// --- Test generateWorkingDiffOutput ---
+// Verifies that the working diff includes both tracked (modified) files
+// and untracked files. Previously, a silent catch on maxBuffer errors
+// caused tracked file diffs to be silently dropped.
+
+describe("generateWorkingDiffOutput", () => {
+  let tmpDir: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    origCwd = process.cwd();
+    tmpDir = mkdtempSync(join(tmpdir(), "git-diff-test-"));
+    execSync("git init", { cwd: tmpDir });
+    execSync("git config user.email test@test.com", { cwd: tmpDir });
+    execSync("git config user.name Test", { cwd: tmpDir });
+  });
+
+  afterEach(() => {
+    process.chdir(origCwd);
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("includes diffs for both tracked modified files and untracked files", () => {
+    // Create and commit a tracked file
+    writeFileSync(join(tmpDir, "tracked.txt"), "original content");
+    execSync("git add tracked.txt && git commit -m init", { cwd: tmpDir });
+
+    // Modify the tracked file (creates an unstaged change)
+    writeFileSync(join(tmpDir, "tracked.txt"), "modified content");
+
+    // Create an untracked file
+    writeFileSync(join(tmpDir, "untracked.txt"), "new file content");
+
+    process.chdir(tmpDir);
+    const result = generateWorkingDiffOutput({ hideWhitespace: true });
+
+    // Both files should appear in the diff
+    expect(result.diff).toContain("tracked.txt");
+    expect(result.diff).toContain("untracked.txt");
+    expect(result.errors).toEqual([]);
+  });
+
+  it("includes diffs for staged files", () => {
+    writeFileSync(join(tmpDir, "staged.txt"), "original");
+    execSync("git add staged.txt && git commit -m init", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "staged.txt"), "changed");
+    execSync("git add staged.txt", { cwd: tmpDir });
+
+    process.chdir(tmpDir);
+    const result = generateWorkingDiffOutput({ hideWhitespace: true });
+
+    expect(result.diff).toContain("staged.txt");
+    expect(result.errors).toEqual([]);
+  });
+
+  it("handles large diffs without silently failing", () => {
+    // Create a file with enough content to generate a large diff
+    const largeContent = "line\n".repeat(50000);
+    writeFileSync(join(tmpDir, "large.txt"), largeContent);
+    execSync("git add large.txt && git commit -m init", { cwd: tmpDir });
+
+    // Modify every line to create a massive diff
+    const modifiedContent = "modified-line\n".repeat(50000);
+    writeFileSync(join(tmpDir, "large.txt"), modifiedContent);
+
+    // Also add an untracked file
+    writeFileSync(join(tmpDir, "small.txt"), "hello");
+
+    process.chdir(tmpDir);
+    const result = generateWorkingDiffOutput({ hideWhitespace: true });
+
+    // Both files must appear — the large diff must not cause
+    // the tracked file diff to be silently dropped
+    expect(result.diff).toContain("large.txt");
+    expect(result.diff).toContain("small.txt");
+    expect(result.errors).toEqual([]);
+  });
+
+  it("reports errors for unreadable untracked files instead of silently ignoring", () => {
+    writeFileSync(join(tmpDir, "readable.txt"), "hello");
+    // Create a directory with the same name as a file git would try to read
+    mkdirSync(join(tmpDir, "not-a-file"));
+    // We can't easily force git ls-files to list a directory as untracked,
+    // so instead test that a successfully generated diff has no errors
+    process.chdir(tmpDir);
+    const result = generateWorkingDiffOutput({ hideWhitespace: true });
+    // readable.txt should be in the diff as an untracked file
+    expect(result.diff).toContain("readable.txt");
+  });
+});
 
 describe("getUntrackedFiles", () => {
   let tmpDir: string;

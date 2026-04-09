@@ -524,6 +524,7 @@ class GitComponent implements Component {
         const staged = execSync(`git diff --cached -- ${quotedTracked}`, {
           encoding: "utf-8",
           timeout: 10000,
+          maxBuffer: DIFF_MAX_BUFFER,
           cwd: process.cwd(),
         }).trim();
         if (staged) diffParts.push(staged);
@@ -536,6 +537,7 @@ class GitComponent implements Component {
         const unstaged = execSync(`git diff -- ${quotedTracked}`, {
           encoding: "utf-8",
           timeout: 10000,
+          maxBuffer: DIFF_MAX_BUFFER,
           cwd: process.cwd(),
         }).trim();
         if (unstaged) diffParts.push(unstaged);
@@ -1235,53 +1237,13 @@ class GitComponent implements Component {
 
   /** Generate the diff output for the working tree (staged + unstaged + untracked). */
   private generateWorkingDiff(): string {
-    let diffOutput = "";
-    const wsFlag = this.hideWhitespace ? " -w" : "";
-
-    // Show full diff of all changes (staged + unstaged), like `git diff`
-    try {
-      const staged = execSync(`git diff --color --cached${wsFlag}`, {
-        encoding: "utf-8",
-        timeout: 10000,
-        cwd: process.cwd(),
-      });
-      if (staged) diffOutput += staged;
-    } catch {
-      // No staged changes or git error
+    const result = generateWorkingDiffOutput({
+      hideWhitespace: this.hideWhitespace,
+    });
+    for (const error of result.errors) {
+      this.ctx.ui.notify(error, "error");
     }
-    try {
-      const unstaged = execSync(`git diff --color${wsFlag}`, {
-        encoding: "utf-8",
-        timeout: 10000,
-        cwd: process.cwd(),
-      });
-      if (unstaged) diffOutput += (diffOutput ? "\n" : "") + unstaged;
-    } catch {
-      // No unstaged changes or git error
-    }
-
-    // Include untracked files as pseudo-diffs
-    const untrackedFiles = getUntrackedFiles();
-
-    for (const f of untrackedFiles) {
-      try {
-        const content = readFileSync(f, "utf-8");
-        const header =
-          `\x1b[1mdiff --git a/${f} b/${f}\x1b[m\n` +
-          `\x1b[1mnew file\x1b[m\n` +
-          `\x1b[1m--- /dev/null\x1b[m\n` +
-          `\x1b[1m+++ b/${f}\x1b[m\n`;
-        const coloredLines = content
-          .split("\n")
-          .map((l) => `\x1b[32m+${l}\x1b[m`)
-          .join("\n");
-        diffOutput += (diffOutput ? "\n" : "") + header + coloredLines;
-      } catch {
-        // Skip files that can't be read (binary, permission, etc.)
-      }
-    }
-
-    return diffOutput;
+    return result.diff;
   }
 
   /** Generate the diff output for the branch (compared to fork point). */
@@ -1300,6 +1262,7 @@ class GitComponent implements Component {
       return execSync(`git diff --color${wsFlag} ${forkPoint.commit}...HEAD`, {
         encoding: "utf-8",
         timeout: 10000,
+        maxBuffer: DIFF_MAX_BUFFER,
         cwd: process.cwd(),
       });
     } catch (err: any) {
@@ -2266,6 +2229,72 @@ class GitComponent implements Component {
 
     return lines;
   }
+}
+
+// --- Exported diff generation (used by tests) ---
+
+const DIFF_MAX_BUFFER = 50 * 1024 * 1024; // 50 MB
+
+/**
+ * Generate the diff output for the working tree (staged + unstaged + untracked).
+ * Exported for testing.
+ */
+export function generateWorkingDiffOutput(opts: { hideWhitespace: boolean }): {
+  diff: string;
+  errors: string[];
+} {
+  let diffOutput = "";
+  const errors: string[] = [];
+  const wsFlag = opts.hideWhitespace ? " -w" : "";
+
+  // Show full diff of all changes (staged + unstaged), like `git diff`
+  try {
+    const staged = execSync(`git diff --color --cached${wsFlag}`, {
+      encoding: "utf-8",
+      timeout: 10000,
+      maxBuffer: DIFF_MAX_BUFFER,
+      cwd: process.cwd(),
+    });
+    if (staged) diffOutput += staged;
+  } catch (err: any) {
+    const detail = err.stderr?.trim() || err.message;
+    if (detail) errors.push(`git diff --cached failed: ${detail}`);
+  }
+  try {
+    const unstaged = execSync(`git diff --color${wsFlag}`, {
+      encoding: "utf-8",
+      timeout: 10000,
+      maxBuffer: DIFF_MAX_BUFFER,
+      cwd: process.cwd(),
+    });
+    if (unstaged) diffOutput += (diffOutput ? "\n" : "") + unstaged;
+  } catch (err: any) {
+    const detail = err.stderr?.trim() || err.message;
+    if (detail) errors.push(`git diff failed: ${detail}`);
+  }
+
+  // Include untracked files as pseudo-diffs
+  const untrackedFiles = getUntrackedFiles();
+
+  for (const f of untrackedFiles) {
+    try {
+      const content = readFileSync(f, "utf-8");
+      const header =
+        `\x1b[1mdiff --git a/${f} b/${f}\x1b[m\n` +
+        `\x1b[1mnew file\x1b[m\n` +
+        `\x1b[1m--- /dev/null\x1b[m\n` +
+        `\x1b[1m+++ b/${f}\x1b[m\n`;
+      const coloredLines = content
+        .split("\n")
+        .map((l) => `\x1b[32m+${l}\x1b[m`)
+        .join("\n");
+      diffOutput += (diffOutput ? "\n" : "") + header + coloredLines;
+    } catch (err: any) {
+      errors.push(`Failed to read ${f}: ${err.message}`);
+    }
+  }
+
+  return { diff: diffOutput, errors };
 }
 
 // --- File path autocomplete provider ---
