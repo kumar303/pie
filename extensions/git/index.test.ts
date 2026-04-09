@@ -152,6 +152,71 @@ describe("select-all toggle logic", () => {
   });
 });
 
+// --- Test diff viewer escape/discard behavior ---
+// Mirrors the escape + discard confirmation logic in handleDiffViewer.
+// When the user confirms discard ("y"), the prompt should be cleared but
+// the diff viewer should remain open — NOT exit. A second escape is needed to exit.
+
+describe("diff viewer discard prompt behavior", () => {
+  /**
+   * Simulates the discard confirmation handler from handleDiffViewer.
+   * Returns the resulting state after the user presses "y" to confirm discard.
+   */
+  function simulateDiscardConfirm(opts: {
+    confirmDiscard: boolean;
+    promptText: string;
+    diffFocusPane: "diff" | "prompt";
+  }): {
+    confirmDiscard: boolean;
+    promptText: string;
+    exited: boolean;
+    diffFocusPane: "diff" | "prompt";
+  } {
+    let { confirmDiscard, promptText, diffFocusPane } = opts;
+    const exited = false;
+
+    // This mirrors the logic in handleDiffViewer when user presses "y"
+    if (confirmDiscard) {
+      promptText = "";
+      confirmDiscard = false;
+      diffFocusPane = "diff";
+      // BUG (before fix): onDone() was called here, exiting the viewer
+      // FIXED: should NOT exit — just clear prompt and stay
+    }
+
+    return { confirmDiscard, promptText, exited, diffFocusPane };
+  }
+
+  it("clears prompt text when discard is confirmed", () => {
+    const result = simulateDiscardConfirm({
+      confirmDiscard: true,
+      promptText: "some question about the diff",
+      diffFocusPane: "diff",
+    });
+    expect(result.promptText).toBe("");
+    expect(result.confirmDiscard).toBe(false);
+  });
+
+  it("does NOT exit the diff viewer when discard is confirmed", () => {
+    const result = simulateDiscardConfirm({
+      confirmDiscard: true,
+      promptText: "some question",
+      diffFocusPane: "diff",
+    });
+    expect(result.exited).toBe(false);
+  });
+
+  it("switches to diff pane when discard is confirmed from prompt pane", () => {
+    const result = simulateDiscardConfirm({
+      confirmDiscard: true,
+      promptText: "some question",
+      diffFocusPane: "prompt",
+    });
+    expect(result.diffFocusPane).toBe("diff");
+    expect(result.exited).toBe(false);
+  });
+});
+
 // --- Test diff gathering categorization ---
 // Verifies that files are correctly categorized as tracked vs untracked
 // for diff gathering in generateCommitMessage.

@@ -1417,7 +1417,10 @@ class GitComponent implements Component {
       if (matchesKey(data, "y")) {
         this.promptEditor.setText("");
         this.confirmDiscard = false;
-        this.onDone();
+        this.diffFocusPane = "diff";
+        this.promptEditor.focused = false;
+        this.invalidate();
+        this.tui.requestRender();
       } else if (matchesKey(data, "n") || matchesKey(data, Key.escape)) {
         this.confirmDiscard = false;
         this.invalidate();
