@@ -1,6 +1,6 @@
 # git
 
-Interactive git UI inside pi. Invoke with `/git`.
+View git diffs and re-prompt the agent. Invoke with `/git`.
 
 ## File selector
 

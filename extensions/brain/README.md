@@ -1,6 +1,6 @@
 # brain
 
-TUI for keeping track of what I'm working on. Invoke with `/brain`.
+Multi-task ongoing pi sessions. Invoke with `/brain`.
 
 My own tiny little brain can't handle multi-tasking but with [`pi`](https://pi.dev/) there's so much I want to do all the time.
 Typing `/brain` shows me all the tasks I'm waiting on and lets me navigate between them.

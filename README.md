@@ -4,7 +4,7 @@
 pie[xtensions, agents, skills, and stuff]
 ```
 
-My daily-use extensions for [pi](https://pi.dev), a customizable coding agent that runs in your terminal.
+My daily-use extensions for [pi](https://pi.dev), a customizable coding agent.
 
 Yolo. Some work well, some are more experimental. They come with **no guarantee of support**.
 
@@ -12,11 +12,12 @@ All code is licensed under [WTFPL](LICENSE).
 
 ## Extensions
 
-| Extension                                                    | Description                                                                                                                                                                                                        |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [brain](extensions/brain/)                                   | Three-panel TUI for browsing recent project directories and their tool output logs. Invoke with `/brain`.                                                                                                          |
-| [git](extensions/git/)                                       | Interactive git file selector and command runner. Invoke with `/git`. Navigate files, select with tab, run commands with `{}` placeholder expansion, generate commit messages with AI, view diffs in a split pane. |
-| [no-sleep-while-working](extensions/no-sleep-while-working/) | Prevents your Mac from sleeping while pi is actively working. Uses `caffeinate` under the hood.                                                                                                                    |
+| Extension                                                    | Description                                                                                                                |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| [brain](extensions/brain/)                                   | Multi-task ongoing pi sessions. Invoke with `/brain`.                                                                      |
+| [git](extensions/git/)                                       | View git diffs and re-prompt the agent. Invoke with `/git`.                                                                |
+| [no-sleep-while-working](extensions/no-sleep-while-working/) | Prevents your Mac from sleeping while pi is actively working on a task.                                                    |
+| [pie-kumar303-config](extensions/pie-kumar303-config/)       | Extension manager for this repo. Invoke with `/pie-kumar303-config` to selectively install/remove extensions via symlinks. |
 
 ## Install
 
@@ -26,11 +27,9 @@ Install pie as a pi package from git:
 pi install https://github.com/kumar303/pie
 ```
 
-This clones the repo and loads all extensions automatically.
+This clones the repo and loads the config extension. Then use `/pie-kumar303-config` to selectively install the other extensions.
 
-### Managing extensions
-
-After installing, use `pi config` to enable or disable individual extensions. Run `pi update` to pull the latest changes.
+Run `pi update` to pull the latest changes.
 
 ## Development
 
