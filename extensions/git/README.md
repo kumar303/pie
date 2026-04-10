@@ -39,11 +39,16 @@ Quickly page through a diff and tell the agent how dumb it is. Two panes: a diff
 
 ### Features
 
+- syntax-highlighted diffs via [delta](https://github.com/dandavison/delta) (when installed)
 - option: hide whitespace
 - option: hide tests
 - option: hide files on demand like `package-lock.json`
 - jump to the next / previous file
 - full prompt editor with auto-completion and history
+
+### Recommended: install delta
+
+Install [delta](https://github.com/dandavison/delta) for syntax-highlighted diffs. When delta is on your PATH, the diff viewer uses it automatically. Without it, diffs fall back to git's built-in coloring.
 
 ## Auto-generated commits
 

@@ -294,6 +294,10 @@ import { execSync } from "node:child_process";
 import {
   FilePathAutocompleteProvider,
   generateWorkingDiffOutput,
+  isDeltaAvailable,
+  pipeThroughDelta,
+  buildFileIndex,
+  remapFileIndex,
 } from "./index.ts";
 
 function getUntrackedFiles(): string[] {
@@ -397,6 +401,197 @@ describe("generateWorkingDiffOutput", () => {
     const result = generateWorkingDiffOutput({ hideWhitespace: true });
     // readable.txt should be in the diff as an untracked file
     expect(result.diff).toContain("readable.txt");
+  });
+});
+
+// --- Test delta integration ---
+
+describe("isDeltaAvailable", () => {
+  it("returns a boolean", () => {
+    const result = isDeltaAvailable();
+    expect(typeof result).toBe("boolean");
+  });
+
+  it("returns consistent results (cached)", () => {
+    const first = isDeltaAvailable();
+    const second = isDeltaAvailable();
+    expect(first).toBe(second);
+  });
+});
+
+describe("pipeThroughDelta", () => {
+  it("returns the input unchanged when forceAvailable is false", () => {
+    const input = "diff --git a/f b/f\n+hello";
+    const result = pipeThroughDelta(input, { forceAvailable: false });
+    expect(result.text).toBe(input);
+    expect(result.error).toBeUndefined();
+  });
+
+  it("returns the input with an error when delta command fails", () => {
+    const input = "some diff text";
+    const result = pipeThroughDelta(input, {
+      forceAvailable: true,
+      deltaCommand: "false", // `false` exits with code 1
+    });
+    expect(result.text).toBe(input);
+    expect(result.error).toBeDefined();
+    expect(result.error).toMatch(/delta/);
+  });
+});
+
+describe("buildFileIndex", () => {
+  it("parses diff --git headers from raw diff output", () => {
+    const rawDiff = [
+      "diff --git a/foo.txt b/foo.txt",
+      "--- a/foo.txt",
+      "+++ b/foo.txt",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "diff --git a/bar.txt b/bar.txt",
+      "--- a/bar.txt",
+      "+++ b/bar.txt",
+      "@@ -1 +1 @@",
+      "-hello",
+      "+world",
+    ].join("\n");
+
+    const index = buildFileIndex(rawDiff);
+    expect(index).toEqual([
+      { line: 0, name: "foo.txt" },
+      { line: 6, name: "bar.txt" },
+    ]);
+  });
+
+  it("handles ANSI-colored diff headers", () => {
+    const rawDiff =
+      "\x1b[1mdiff --git a/file.ts b/file.ts\x1b[m\n" +
+      "--- a/file.ts\n" +
+      "+++ b/file.ts\n";
+    const index = buildFileIndex(rawDiff);
+    expect(index).toEqual([{ line: 0, name: "file.ts" }]);
+  });
+
+  it("returns empty array for non-diff input", () => {
+    expect(buildFileIndex("just some text")).toEqual([]);
+    expect(buildFileIndex("")).toEqual([]);
+  });
+});
+
+describe("remapFileIndex", () => {
+  it("remaps line numbers to match file names in transformed output", () => {
+    // Simulate delta-style output where file names appear on different lines
+    const deltaOutput = [
+      "", // line 0: empty
+      "\x1b[34m\u0394 foo.txt\x1b[0m", // line 1: delta header for foo
+      "\u2500\u2500\u2500\u2500", // line 2: separator
+      "-old", // line 3
+      "+new", // line 4
+      "", // line 5: empty
+      "\x1b[34m\u0394 bar.txt\x1b[0m", // line 6: delta header for bar
+      "\u2500\u2500\u2500\u2500", // line 7: separator
+      "-hello", // line 8
+      "+world", // line 9
+    ].join("\n");
+
+    const fileIndex = [
+      { line: 0, name: "foo.txt" },
+      { line: 6, name: "bar.txt" },
+    ];
+
+    remapFileIndex(fileIndex, deltaOutput);
+
+    expect(fileIndex[0].line).toBe(1);
+    expect(fileIndex[1].line).toBe(6);
+  });
+
+  it("preserves order when searching for file names", () => {
+    // Ensure the search advances forward so files with similar names
+    // don't map to the same line
+    const deltaOutput = [
+      "\x1b[34m\u0394 utils.ts\x1b[0m",
+      "-old",
+      "+new",
+      "\x1b[34m\u0394 utils.ts\x1b[0m", // same name, second occurrence
+    ].join("\n");
+
+    const fileIndex = [
+      { line: 0, name: "utils.ts" },
+      { line: 5, name: "utils.ts" },
+    ];
+
+    remapFileIndex(fileIndex, deltaOutput);
+
+    expect(fileIndex[0].line).toBe(0);
+    expect(fileIndex[1].line).toBe(3);
+  });
+});
+
+describe("generateWorkingDiffOutput with delta", () => {
+  let tmpDir: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    origCwd = process.cwd();
+    tmpDir = mkdtempSync(join(tmpdir(), "git-delta-"));
+    execSync("git init", { cwd: tmpDir });
+    execSync('git config user.email "test@test.com"', { cwd: tmpDir });
+    execSync('git config user.name "Test"', { cwd: tmpDir });
+  });
+
+  afterEach(() => {
+    process.chdir(origCwd);
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns a fileIndex with correct file names without delta", () => {
+    writeFileSync(join(tmpDir, "foo.txt"), "original foo");
+    writeFileSync(join(tmpDir, "bar.txt"), "original bar");
+    execSync("git add . && git commit -m init", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "foo.txt"), "modified foo");
+    writeFileSync(join(tmpDir, "bar.txt"), "modified bar");
+    process.chdir(tmpDir);
+
+    const result = generateWorkingDiffOutput({
+      hideWhitespace: true,
+      useDelta: false,
+    });
+
+    const names = result.fileIndex.map((e) => e.name).sort();
+    expect(names).toEqual(["bar.txt", "foo.txt"]);
+  });
+
+  it("includes untracked files in the fileIndex", () => {
+    writeFileSync(join(tmpDir, "tracked.txt"), "original");
+    execSync("git add . && git commit -m init", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "tracked.txt"), "modified");
+    writeFileSync(join(tmpDir, "untracked.txt"), "new file");
+    process.chdir(tmpDir);
+
+    const result = generateWorkingDiffOutput({
+      hideWhitespace: true,
+      useDelta: false,
+    });
+
+    const names = result.fileIndex.map((e) => e.name).sort();
+    expect(names).toEqual(["tracked.txt", "untracked.txt"]);
+  });
+
+  it("falls back to git color when useDelta is false", () => {
+    writeFileSync(join(tmpDir, "file.txt"), "original");
+    execSync("git add file.txt && git commit -m init", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "file.txt"), "modified");
+    process.chdir(tmpDir);
+
+    const result = generateWorkingDiffOutput({
+      hideWhitespace: true,
+      useDelta: false,
+    });
+
+    expect(result.diff).toContain("file.txt");
+    // Should have git's ANSI color codes
+    // eslint-disable-next-line no-control-regex
+    expect(result.diff).toMatch(/\x1b\[/);
   });
 });
 

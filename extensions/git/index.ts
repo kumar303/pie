@@ -1203,8 +1203,15 @@ class GitComponent implements Component {
     this.activeDiffFileIndex = filteredFileIndex;
   }
 
-  /** Set up diff viewer state from raw diff output and switch to diff phase. */
-  private showDiff(diffOutput: string, emptyMessage: string): void {
+  /** Set up diff viewer state from raw diff output and switch to diff phase.
+   *  When a pre-built fileIndex is provided (e.g. from delta-processed output),
+   *  it is used directly instead of parsing "diff --git" lines from the output.
+   */
+  private showDiff(
+    diffOutput: string,
+    emptyMessage: string,
+    fileIndex?: { line: number; name: string }[],
+  ): void {
     if (!diffOutput.trim()) {
       this.ctx.ui.notify(emptyMessage, "info");
       return;
@@ -1217,15 +1224,19 @@ class GitComponent implements Component {
     this.promptEditor.focused = false;
     this.confirmDiscard = false;
 
-    // Build file index from diff output - parse "diff --git a/... b/..." lines
-    // Strip ANSI codes for matching since diff output is colorized
-    this.diffFileIndex = [];
-    for (let i = 0; i < this.diffLines.length; i++) {
-      // eslint-disable-next-line no-control-regex
-      const stripped = this.diffLines[i].replace(/\x1b\[[0-9;]*m/g, "");
-      const match = stripped.match(/^diff --git a\/(.+?) b\/(.+)/);
-      if (match) {
-        this.diffFileIndex.push({ line: i, name: match[2] });
+    if (fileIndex) {
+      this.diffFileIndex = fileIndex;
+    } else {
+      // Build file index from diff output - parse "diff --git a/... b/..." lines
+      // Strip ANSI codes for matching since diff output is colorized
+      this.diffFileIndex = [];
+      for (let i = 0; i < this.diffLines.length; i++) {
+        // eslint-disable-next-line no-control-regex
+        const stripped = this.diffLines[i].replace(/\x1b\[[0-9;]*m/g, "");
+        const match = stripped.match(/^diff --git a\/(.+?) b\/(.+)/);
+        if (match) {
+          this.diffFileIndex.push({ line: i, name: match[2] });
+        }
       }
     }
 
@@ -1236,18 +1247,24 @@ class GitComponent implements Component {
   }
 
   /** Generate the diff output for the working tree (staged + unstaged + untracked). */
-  private generateWorkingDiff(): string {
+  private generateWorkingDiff(): {
+    diff: string;
+    fileIndex: { line: number; name: string }[];
+  } {
     const result = generateWorkingDiffOutput({
       hideWhitespace: this.hideWhitespace,
     });
     for (const error of result.errors) {
       this.ctx.ui.notify(error, "error");
     }
-    return result.diff;
+    return { diff: result.diff, fileIndex: result.fileIndex };
   }
 
   /** Generate the diff output for the branch (compared to fork point). */
-  private generateBranchDiff(): string | null {
+  private generateBranchDiff(): {
+    diff: string;
+    fileIndex: { line: number; name: string }[];
+  } | null {
     const forkPoint = this.getForkPoint();
     if (!forkPoint) {
       this.ctx.ui.notify(
@@ -1258,13 +1275,28 @@ class GitComponent implements Component {
     }
 
     const wsFlag = this.hideWhitespace ? " -w" : "";
+    const useDelta = isDeltaAvailable();
+    const colorFlag = useDelta ? "" : " --color";
     try {
-      return execSync(`git diff --color${wsFlag} ${forkPoint.commit}...HEAD`, {
-        encoding: "utf-8",
-        timeout: 10000,
-        maxBuffer: DIFF_MAX_BUFFER,
-        cwd: process.cwd(),
-      });
+      let output = execSync(
+        `git diff${colorFlag}${wsFlag} ${forkPoint.commit}...HEAD`,
+        {
+          encoding: "utf-8",
+          timeout: 10000,
+          maxBuffer: DIFF_MAX_BUFFER,
+          cwd: process.cwd(),
+        },
+      );
+      const fileIndex = buildFileIndex(output);
+      if (useDelta) {
+        const delta = pipeThroughDelta(output, { forceAvailable: true });
+        if (delta.error) {
+          this.ctx.ui.notify(delta.error, "error");
+        }
+        output = delta.text;
+        remapFileIndex(fileIndex, output);
+      }
+      return { diff: output, fileIndex };
     } catch (err: any) {
       this.ctx.ui.notify(
         `Branch diff failed: ${err.stderr?.trim() || err.message}`,
@@ -1343,29 +1375,36 @@ class GitComponent implements Component {
 
   private openDiffViewer(): void {
     this.diffMode = "working";
-    const diffOutput = this.generateWorkingDiff();
-    this.showDiff(diffOutput, "No diff to show");
+    const result = this.generateWorkingDiff();
+    this.showDiff(result.diff, "No diff to show", result.fileIndex);
   }
 
   private openBranchDiffViewer(): void {
     this.diffMode = "branch";
-    const diffOutput = this.generateBranchDiff();
-    if (diffOutput === null) return;
-    this.showDiff(diffOutput, `No diff compared to base branch`);
+    const result = this.generateBranchDiff();
+    if (result === null) return;
+    this.showDiff(
+      result.diff,
+      `No diff compared to base branch`,
+      result.fileIndex,
+    );
   }
 
   /** Re-run the current diff (e.g. after toggling whitespace). */
   private refreshDiffViewer(): void {
-    let diffOutput: string | null;
+    let result: {
+      diff: string;
+      fileIndex: { line: number; name: string }[];
+    } | null;
     if (this.diffMode === "branch") {
-      diffOutput = this.generateBranchDiff();
-      if (diffOutput === null) return;
+      result = this.generateBranchDiff();
+      if (result === null) return;
     } else {
-      diffOutput = this.generateWorkingDiff();
+      result = this.generateWorkingDiff();
     }
     // Preserve scroll position as much as possible
     const prevScroll = this.diffScrollOffset;
-    this.showDiff(diffOutput, "No diff to show");
+    this.showDiff(result.diff, "No diff to show", result.fileIndex);
     this.diffScrollOffset = Math.min(
       prevScroll,
       Math.max(0, this.activeDiffLines.length - 1),
@@ -2231,6 +2270,114 @@ class GitComponent implements Component {
   }
 }
 
+// --- Delta integration ---
+
+let _deltaAvailable: boolean | undefined;
+
+/**
+ * Check if the `delta` command is available on the PATH.
+ * Result is cached for the lifetime of the process.
+ */
+export function isDeltaAvailable(): boolean {
+  if (_deltaAvailable === undefined) {
+    try {
+      execSync("which delta", {
+        encoding: "utf-8",
+        timeout: 5000,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      _deltaAvailable = true;
+    } catch {
+      _deltaAvailable = false;
+    }
+  }
+  return _deltaAvailable;
+}
+
+/**
+ * Pipe raw diff text through `delta` for syntax-highlighted output.
+ * Falls back to returning the input unchanged if delta is unavailable or fails.
+ *
+ * @param diffText - Raw or colorized diff text
+ * @param opts.forceAvailable - Override the delta availability check
+ */
+export function pipeThroughDelta(
+  diffText: string,
+  opts?: { forceAvailable?: boolean; deltaCommand?: string },
+): { text: string; error?: string } {
+  const available = opts?.forceAvailable ?? isDeltaAvailable();
+  if (!available) return { text: diffText };
+
+  const cmd = opts?.deltaCommand ?? "delta --paging=never";
+  try {
+    return {
+      text: execSync(cmd, {
+        input: diffText,
+        encoding: "utf-8",
+        timeout: 15000,
+        maxBuffer: DIFF_MAX_BUFFER,
+        cwd: process.cwd(),
+      }),
+    };
+  } catch (err: any) {
+    const detail = err.stderr?.trim() || err.message;
+    return {
+      text: diffText,
+      error: `delta failed: ${detail}`,
+    };
+  }
+}
+
+/**
+ * Build a file index from raw diff output by parsing "diff --git a/... b/..." lines.
+ */
+export function buildFileIndex(
+  rawDiff: string,
+): { line: number; name: string }[] {
+  const index: { line: number; name: string }[] = [];
+  const lines = rawDiff.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    // eslint-disable-next-line no-control-regex
+    const stripped = lines[i].replace(/\x1b\[[0-9;]*m/g, "");
+    const match = stripped.match(/^diff --git a\/(.+?) b\/(.+)/);
+    if (match) {
+      index.push({ line: i, name: match[2] });
+    }
+  }
+  return index;
+}
+
+/**
+ * After delta transforms the diff, remap file index line numbers.
+ * Delta replaces "diff --git" headers with styled lines containing the file name.
+ * We search for each file name in the delta output to find new positions.
+ */
+export function remapFileIndex(
+  fileIndex: { line: number; name: string }[],
+  deltaOutput: string,
+): void {
+  const lines = deltaOutput.split("\n");
+  // For each file, find the first line in delta output containing the file name
+  // that hasn't been claimed by a previous file. Delta preserves file order.
+  let searchFrom = 0;
+  for (const entry of fileIndex) {
+    for (let i = searchFrom; i < lines.length; i++) {
+      // Strip ANSI codes and non-ASCII decorations for matching
+      /* eslint-disable no-control-regex */
+      const stripped = lines[i]
+        .replace(/\x1b\[[0-9;]*m/g, "")
+        .replace(/[^\x20-\x7e]/g, "")
+        .trim();
+      /* eslint-enable no-control-regex */
+      if (stripped.includes(entry.name)) {
+        entry.line = i;
+        searchFrom = i + 1;
+        break;
+      }
+    }
+  }
+}
+
 // --- Exported diff generation (used by tests) ---
 
 const DIFF_MAX_BUFFER = 50 * 1024 * 1024; // 50 MB
@@ -2238,18 +2385,28 @@ const DIFF_MAX_BUFFER = 50 * 1024 * 1024; // 50 MB
 /**
  * Generate the diff output for the working tree (staged + unstaged + untracked).
  * Exported for testing.
+ *
+ * When `useDelta` is true (default: auto-detected), diff output is piped
+ * through the `delta` command for syntax highlighting.
  */
-export function generateWorkingDiffOutput(opts: { hideWhitespace: boolean }): {
+export function generateWorkingDiffOutput(opts: {
+  hideWhitespace: boolean;
+  useDelta?: boolean;
+}): {
   diff: string;
   errors: string[];
+  fileIndex: { line: number; name: string }[];
 } {
+  const useDelta = opts.useDelta ?? isDeltaAvailable();
   let diffOutput = "";
   const errors: string[] = [];
   const wsFlag = opts.hideWhitespace ? " -w" : "";
+  // When using delta, omit --color so delta handles all coloring
+  const colorFlag = useDelta ? "" : " --color";
 
   // Show full diff of all changes (staged + unstaged), like `git diff`
   try {
-    const staged = execSync(`git diff --color --cached${wsFlag}`, {
+    const staged = execSync(`git diff${colorFlag} --cached${wsFlag}`, {
       encoding: "utf-8",
       timeout: 10000,
       maxBuffer: DIFF_MAX_BUFFER,
@@ -2261,7 +2418,7 @@ export function generateWorkingDiffOutput(opts: { hideWhitespace: boolean }): {
     if (detail) errors.push(`git diff --cached failed: ${detail}`);
   }
   try {
-    const unstaged = execSync(`git diff --color${wsFlag}`, {
+    const unstaged = execSync(`git diff${colorFlag}${wsFlag}`, {
       encoding: "utf-8",
       timeout: 10000,
       maxBuffer: DIFF_MAX_BUFFER,
@@ -2279,22 +2436,51 @@ export function generateWorkingDiffOutput(opts: { hideWhitespace: boolean }): {
   for (const f of untrackedFiles) {
     try {
       const content = readFileSync(f, "utf-8");
-      const header =
-        `\x1b[1mdiff --git a/${f} b/${f}\x1b[m\n` +
-        `\x1b[1mnew file\x1b[m\n` +
-        `\x1b[1m--- /dev/null\x1b[m\n` +
-        `\x1b[1m+++ b/${f}\x1b[m\n`;
-      const coloredLines = content
-        .split("\n")
-        .map((l) => `\x1b[32m+${l}\x1b[m`)
-        .join("\n");
-      diffOutput += (diffOutput ? "\n" : "") + header + coloredLines;
+      if (useDelta) {
+        // Raw diff format for delta to colorize
+        const header =
+          `diff --git a/${f} b/${f}\n` +
+          `new file\n` +
+          `--- /dev/null\n` +
+          `+++ b/${f}\n`;
+        const rawLines = content
+          .split("\n")
+          .map((l) => `+${l}`)
+          .join("\n");
+        diffOutput += (diffOutput ? "\n" : "") + header + rawLines;
+      } else {
+        const header =
+          `\x1b[1mdiff --git a/${f} b/${f}\x1b[m\n` +
+          `\x1b[1mnew file\x1b[m\n` +
+          `\x1b[1m--- /dev/null\x1b[m\n` +
+          `\x1b[1m+++ b/${f}\x1b[m\n`;
+        const coloredLines = content
+          .split("\n")
+          .map((l) => `\x1b[32m+${l}\x1b[m`)
+          .join("\n");
+        diffOutput += (diffOutput ? "\n" : "") + header + coloredLines;
+      }
     } catch (err: any) {
       errors.push(`Failed to read ${f}: ${err.message}`);
     }
   }
 
-  return { diff: diffOutput, errors };
+  // Build file index from the raw diff (before delta transforms the headers)
+  const fileIndex = buildFileIndex(diffOutput);
+
+  // Pipe the entire diff through delta for syntax highlighting
+  if (useDelta) {
+    const delta = pipeThroughDelta(diffOutput, { forceAvailable: true });
+    if (delta.error) {
+      errors.push(delta.error);
+    }
+    diffOutput = delta.text;
+    // Rebuild line positions: delta changes line count, so find each file
+    // name in the delta output. Delta renders file names in its headers.
+    remapFileIndex(fileIndex, diffOutput);
+  }
+
+  return { diff: diffOutput, errors, fileIndex };
 }
 
 // --- File path autocomplete provider ---
