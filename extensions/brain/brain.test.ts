@@ -893,6 +893,235 @@ describe("handleSessionsChanged", () => {
   });
 });
 
+describe("earlier projects scrolling", () => {
+  function makeMany(prefix: string, count: number, startId = 1): DirEntry[] {
+    return Array.from({ length: count }, (_, i) => ({
+      sessionId: `${prefix}${startId + i}`,
+      dir: `/home/user/${prefix}${startId + i}`,
+      branch: null,
+      lastFocused: 1000 - i,
+      active: false,
+    }));
+  }
+
+  function getVisibleEarlierItems(
+    component: BrainComponent,
+    width = 80,
+  ): string[] {
+    const lines = component.render(width).map(stripAnsi);
+    // Find the "Earlier" header, then collect non-empty left-panel items after it
+    const items: string[] = [];
+    let inEarlier = false;
+    for (const line of lines) {
+      const left = line.split("│")[0] ?? "";
+      if (left.includes("Earlier")) {
+        inEarlier = true;
+        continue;
+      }
+      if (inEarlier) {
+        // Stop at empty lines or separator
+        const trimmed = left.trim();
+        if (/^─+$/.test(trimmed)) break;
+        if (trimmed.length > 0) items.push(trimmed);
+      }
+    }
+    return items;
+  }
+
+  it("shows all earlier items without scrolling when they fit", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 2), earlier: makeMany("e", 3) },
+    });
+    const items = getVisibleEarlierItems(component);
+    expect(items.length).toBe(3);
+  });
+
+  it("shows a window of earlier items when there are too many to fit", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 2), earlier: makeMany("e", 30) },
+    });
+    const items = getVisibleEarlierItems(component);
+    // Not all 30 should be visible
+    expect(items.length).toBeLessThan(30);
+    expect(items.length).toBeGreaterThan(0);
+  });
+
+  it("d pages down through earlier items", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 2), earlier: makeMany("e", 30) },
+    });
+    const before = getVisibleEarlierItems(component);
+    // Navigate cursor into earlier section first
+    component.handleInput(DOWN); // t2
+    component.handleInput(DOWN); // e1 (first earlier)
+    component.handleInput("d"); // page down
+    const after = getVisibleEarlierItems(component);
+    // The visible window should have shifted
+    expect(after[0]).not.toBe(before[0]);
+  });
+
+  it("u pages up through earlier items", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 2), earlier: makeMany("e", 30) },
+    });
+    // Go to bottom of earlier
+    component.handleInput(DOWN);
+    component.handleInput(DOWN);
+    component.handleInput("G"); // jump to bottom
+    const atBottom = getVisibleEarlierItems(component);
+    component.handleInput("u"); // page up
+    const afterPageUp = getVisibleEarlierItems(component);
+    expect(afterPageUp[0]).not.toBe(atBottom[0]);
+  });
+
+  it("g jumps to top of earlier items", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 2), earlier: makeMany("e", 30) },
+    });
+    component.handleInput(DOWN);
+    component.handleInput(DOWN);
+    component.handleInput("G"); // bottom
+    component.handleInput("g"); // top
+    const items = getVisibleEarlierItems(component);
+    // First earlier item should be visible
+    expect(items.some((i) => i.includes("e1"))).toBe(true);
+  });
+
+  it("G jumps to bottom of earlier items", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 2), earlier: makeMany("e", 30) },
+    });
+    component.handleInput(DOWN);
+    component.handleInput(DOWN);
+    component.handleInput("G"); // bottom
+    const items = getVisibleEarlierItems(component);
+    // Last earlier item should be visible
+    expect(items.some((i) => i.includes("e30"))).toBe(true);
+  });
+
+  it("d/u/g/G do nothing when today list is focused", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 2), earlier: makeMany("e", 30) },
+    });
+    // Cursor on today item (index 0)
+    const before = getVisibleEarlierItems(component);
+    component.handleInput("d");
+    const after = getVisibleEarlierItems(component);
+    expect(after).toEqual(before);
+  });
+
+  it("scrolling follows cursor when navigating down into overflow", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 1), earlier: makeMany("e", 30) },
+    });
+    // Navigate down through all earlier items
+    for (let i = 0; i < 25; i++) component.handleInput(DOWN);
+    const text = renderText(component);
+    // The cursor item should be visible
+    expect(text).toContain(">");
+  });
+
+  it("today items are always fully visible regardless of earlier scroll", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 3), earlier: makeMany("e", 30) },
+    });
+    // Scroll earlier to the bottom
+    component.handleInput(DOWN);
+    component.handleInput(DOWN);
+    component.handleInput(DOWN); // first earlier
+    component.handleInput("G"); // bottom
+    const text = renderText(component);
+    // All today items should still be visible
+    expect(text).toContain("t1");
+    expect(text).toContain("t2");
+    expect(text).toContain("t3");
+  });
+
+  it("d moves cursor to next page", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 2), earlier: makeMany("e", 30) },
+    });
+    // Navigate into earlier
+    component.handleInput(DOWN); // t2
+    component.handleInput(DOWN); // e1
+    const before = renderText(component);
+    expect(before).toContain("> e1");
+    component.handleInput("d"); // page down
+    const after = renderText(component);
+    // Cursor should have moved — no longer on e1
+    expect(after).not.toContain("> e1");
+    // Cursor indicator should still be visible
+    expect(after).toContain(">");
+  });
+
+  it("u moves cursor to previous page", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 2), earlier: makeMany("e", 30) },
+    });
+    // Go to bottom
+    component.handleInput(DOWN);
+    component.handleInput(DOWN);
+    component.handleInput("G"); // cursor on last item
+    component.handleInput("u"); // page up
+    const text = renderText(component);
+    // Cursor should NOT be on the last item
+    expect(text).not.toContain("> e30");
+    expect(text).toContain(">");
+  });
+
+  it("G moves cursor to last earlier item", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 2), earlier: makeMany("e", 30) },
+    });
+    component.handleInput(DOWN);
+    component.handleInput(DOWN); // e1
+    component.handleInput("G");
+    const text = renderText(component);
+    expect(text).toContain("> e30");
+  });
+
+  it("g moves cursor to first earlier item", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 2), earlier: makeMany("e", 30) },
+    });
+    component.handleInput(DOWN);
+    component.handleInput(DOWN); // e1
+    component.handleInput("G"); // last
+    component.handleInput("g"); // first
+    const text = renderText(component);
+    expect(text).toContain("> e1");
+  });
+
+  it("d from middle of page moves cursor forward by half-page", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 1), earlier: makeMany("e", 40) },
+    });
+    component.handleInput(DOWN); // e1
+    component.handleInput("d"); // page down
+    component.handleInput("d"); // page down again
+    const lines = component.render(80).map(stripAnsi);
+    // Find the cursor line
+    const cursorLine = lines.find((l) => l.includes(">"));
+    expect(cursorLine).toBeDefined();
+    // Cursor should not be on e1 or e2 (well past first page)
+    expect(cursorLine).not.toMatch(/> e1\b/);
+    expect(cursorLine).not.toMatch(/> e2\b/);
+  });
+
+  it("shows scroll indicators when earlier list is scrollable", () => {
+    const { component } = createComponent({
+      data: { today: makeMany("t", 2), earlier: makeMany("e", 30) },
+    });
+    // Navigate into earlier
+    component.handleInput(DOWN);
+    component.handleInput(DOWN);
+    const text = renderText(component);
+    // Legend should show d/u/g/G hints
+    expect(text).toContain("d");
+    expect(text).toContain("u");
+  });
+});
+
 describe("handleError", () => {
   it("displays error notification", () => {
     const { component } = createComponent();

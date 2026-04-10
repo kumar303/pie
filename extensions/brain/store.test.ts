@@ -232,7 +232,7 @@ describe("readSessions", () => {
     writeFileSync(file, content);
 
     const data = readSessions(tmpDir, now);
-    expect(data.today.length).toBeLessThanOrEqual(100);
+    expect(data.today.length).toBeLessThanOrEqual(500);
   });
 
   it("sorts by most recently focused first", () => {
@@ -260,9 +260,9 @@ describe("readSessions", () => {
     expect(all[1].dir).toBe("/tmp/a");
   });
 
-  it("prunes entries older than 60 days", () => {
+  it("prunes entries older than 180 days", () => {
     const now = Date.now();
-    const oldTime = now - 61 * 24 * 60 * 60 * 1000;
+    const oldTime = now - 181 * 24 * 60 * 60 * 1000;
     const file = join(tmpDir, "sessions.jsonl");
     const e1 = JSON.stringify({
       sessionId: "s1",

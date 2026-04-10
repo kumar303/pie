@@ -198,8 +198,8 @@ function startOfToday() {
   return d.getTime();
 }
 
-const MAX_LIST = 100;
-const MAX_AGE_DAYS = 60;
+const MAX_LIST = 500;
+const MAX_AGE_DAYS = 180;
 
 /** @param {string} [dataDir] @param {number} [now] @returns {BrainData} */
 export function readSessions(dataDir, now) {

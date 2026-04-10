@@ -54,6 +54,7 @@ export class BrainComponent implements Component {
   private cursor = 0; // index into the unified filtered list (today + earlier)
   private logScrollOffset = 0;
   private logLines: string[] = [];
+  private earlierScrollOffset = 0;
   private searchMode = false;
   private searchQuery = "";
   private filteredToday: DirEntry[];
@@ -198,6 +199,7 @@ export class BrainComponent implements Component {
     this.filteredToday = filterDirs(this.data.today, this.searchQuery);
     this.filteredEarlier = filterDirs(this.data.earlier, this.searchQuery);
     this.cursor = 0;
+    this.earlierScrollOffset = 0;
     this.refreshLog();
   }
 
@@ -241,6 +243,7 @@ export class BrainComponent implements Component {
     if (matchesKey(data, Key.up)) {
       this.moveCursor(-1);
       this.refreshLog();
+      this.ensureCursorVisible();
       this.invalidate();
       this.tui.requestRender();
       return;
@@ -248,9 +251,56 @@ export class BrainComponent implements Component {
     if (matchesKey(data, Key.down)) {
       this.moveCursor(1);
       this.refreshLog();
+      this.ensureCursorVisible();
       this.invalidate();
       this.tui.requestRender();
       return;
+    }
+    // Earlier-section scrolling (only when cursor is in earlier section)
+    if (this.isCursorInEarlier()) {
+      if (matchesKey(data, "d")) {
+        const h = Math.max(1, Math.floor(this.getEarlierVisibleCount() / 2));
+        const newIdx = Math.min(
+          this.filteredEarlier.length - 1,
+          this.cursorEarlierIndex() + h,
+        );
+        this.cursor = this.filteredToday.length + newIdx;
+        this.earlierScrollOffset = Math.min(
+          this.maxEarlierScroll(),
+          this.earlierScrollOffset + h,
+        );
+        this.refreshLog();
+        this.invalidate();
+        this.tui.requestRender();
+        return;
+      }
+      if (matchesKey(data, "u")) {
+        const h = Math.max(1, Math.floor(this.getEarlierVisibleCount() / 2));
+        const newIdx = Math.max(0, this.cursorEarlierIndex() - h);
+        this.cursor = this.filteredToday.length + newIdx;
+        this.earlierScrollOffset = Math.max(0, this.earlierScrollOffset - h);
+        this.refreshLog();
+        this.invalidate();
+        this.tui.requestRender();
+        return;
+      }
+      if (matchesKey(data, "g")) {
+        this.cursor = this.filteredToday.length;
+        this.earlierScrollOffset = 0;
+        this.refreshLog();
+        this.invalidate();
+        this.tui.requestRender();
+        return;
+      }
+      if (matchesKey(data, Key.shift("g"))) {
+        this.cursor =
+          this.filteredToday.length + this.filteredEarlier.length - 1;
+        this.earlierScrollOffset = this.maxEarlierScroll();
+        this.refreshLog();
+        this.invalidate();
+        this.tui.requestRender();
+        return;
+      }
     }
   }
 
@@ -334,6 +384,7 @@ export class BrainComponent implements Component {
     if (matchesKey(data, Key.up)) {
       this.moveCursor(-1);
       this.refreshLog();
+      this.ensureCursorVisible();
       this.invalidate();
       this.tui.requestRender();
       return;
@@ -341,6 +392,7 @@ export class BrainComponent implements Component {
     if (matchesKey(data, Key.down)) {
       this.moveCursor(1);
       this.refreshLog();
+      this.ensureCursorVisible();
       this.invalidate();
       this.tui.requestRender();
       return;
@@ -396,7 +448,45 @@ export class BrainComponent implements Component {
     this.cursor = (this.cursor + delta + len) % len;
   }
 
+  /** Whether the cursor is currently pointing at an item in the earlier section. */
+  private isCursorInEarlier(): boolean {
+    return this.cursor >= this.filteredToday.length;
+  }
+
+  /** Index of the cursor within the earlier list (0-based). */
+  private cursorEarlierIndex(): number {
+    return this.cursor - this.filteredToday.length;
+  }
+
+  /** Number of earlier items that can be displayed at once. */
+  private getEarlierVisibleCount(): number {
+    return this.lastRenderedEarlierSlots;
+  }
+
+  /** Maximum scroll offset for the earlier section. */
+  private maxEarlierScroll(): number {
+    return Math.max(
+      0,
+      this.filteredEarlier.length - this.getEarlierVisibleCount(),
+    );
+  }
+
+  /** Ensure the cursor is visible within the earlier scroll window. */
+  private ensureCursorVisible(): void {
+    if (!this.isCursorInEarlier()) return;
+    const idx = this.cursorEarlierIndex();
+    if (idx < this.earlierScrollOffset) {
+      this.earlierScrollOffset = idx;
+    } else if (
+      idx >=
+      this.earlierScrollOffset + this.getEarlierVisibleCount()
+    ) {
+      this.earlierScrollOffset = idx - this.getEarlierVisibleCount() + 1;
+    }
+  }
+
   private lastRenderedLogPanelHeight = 10;
+  private lastRenderedEarlierSlots = 10;
   private getLogPanelHeight(): number {
     return this.lastRenderedLogPanelHeight;
   }
@@ -464,14 +554,12 @@ export class BrainComponent implements Component {
 
     // Build left-pane content: a flat list of rows with section headers inline
     const leftRows: string[] = [];
-    const maxItems = 15;
 
-    // "Today" section header
     // "Today" section header
     leftRows.push(theme.fg("dim", "   Today"));
 
-    // Today items
-    const todayCount = Math.min(this.filteredToday.length, maxItems);
+    // Today items (always show all)
+    const todayCount = this.filteredToday.length;
     if (todayCount === 0) {
       leftRows.push(theme.fg("dim", "       (none)"));
     } else {
@@ -486,18 +574,33 @@ export class BrainComponent implements Component {
     // "Earlier" section header
     leftRows.push(theme.fg("dim", "   Earlier"));
 
-    // Earlier items
-    const earlierCount = Math.min(this.filteredEarlier.length, maxItems);
-    if (earlierCount === 0) {
+    // Calculate how many rows are available for earlier items
+    const minContentRows = 20;
+    const todaySectionRows = leftRows.length; // headers + today items + blank + earlier header
+    const earlierSlots = Math.max(1, minContentRows - todaySectionRows);
+    this.lastRenderedEarlierSlots = earlierSlots;
+
+    // Clamp earlier scroll offset
+    this.earlierScrollOffset = Math.min(
+      this.earlierScrollOffset,
+      this.maxEarlierScroll(),
+    );
+
+    // Earlier items (scrolled window)
+    if (this.filteredEarlier.length === 0) {
       leftRows.push(theme.fg("dim", "       (none)"));
     } else {
-      for (let i = 0; i < earlierCount; i++) {
+      const visibleStart = this.earlierScrollOffset;
+      const visibleEnd = Math.min(
+        this.filteredEarlier.length,
+        visibleStart + earlierSlots,
+      );
+      for (let i = visibleStart; i < visibleEnd; i++) {
         leftRows.push(this.renderDirEntry(todayCount + i, lw));
       }
     }
 
     // Ensure a minimum height so logs are always readable
-    const minContentRows = 20;
     while (leftRows.length < minContentRows) {
       leftRows.push("");
     }
@@ -606,6 +709,15 @@ export class BrainComponent implements Component {
       return theme.fg(
         "dim",
         " ↑↓ scroll • d page down • u page up • g top • G bottom • tab back • esc quit",
+      );
+    }
+    if (
+      this.isCursorInEarlier() &&
+      this.filteredEarlier.length > this.getEarlierVisibleCount()
+    ) {
+      return theme.fg(
+        "dim",
+        " ↑↓ navigate • d page down • u page up • g top • G bottom • tab logs • / search • esc quit",
       );
     }
     return theme.fg("dim", " ↑↓ navigate • tab logs • / search • esc quit");
