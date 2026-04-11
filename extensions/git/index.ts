@@ -70,7 +70,7 @@ function saveHistory(history: string[]): void {
 
 // --- Parse git status output ---
 
-interface GitFile {
+export interface GitFile {
   status: string;
   path: string;
 }
@@ -145,11 +145,12 @@ type Phase =
   | "enter-command"
   | "result"
   | "diff-viewer"
-  | "branch-status";
+  | "branch-status"
+  | "confirm-branch-check";
 
 // --- Main Component ---
 
-class GitComponent implements Component {
+export class GitComponent implements Component {
   private files: GitFile[];
   private selected: Set<number> = new Set();
   private cursor = 0;
@@ -237,9 +238,7 @@ class GitComponent implements Component {
     this.initPromptEditor();
 
     if (this.files.length === 0) {
-      this.phase = "branch-status";
-      this.branchStatusLoading = true;
-      this.loadBranchStatusAsync();
+      this.phase = "confirm-branch-check";
     }
   }
 
@@ -849,6 +848,8 @@ class GitComponent implements Component {
       this.handleResult(data);
     } else if (this.phase === "diff-viewer") {
       this.handleDiffViewer(data);
+    } else if (this.phase === "confirm-branch-check") {
+      this.handleConfirmBranchCheck(data);
     } else if (this.phase === "branch-status") {
       this.handleBranchStatus(data);
     }
@@ -933,6 +934,21 @@ class GitComponent implements Component {
     // 'b' to show branch diff (all commits compared to base branch)
     if (matchesKey(data, "b")) {
       this.openBranchDiffViewer();
+      return;
+    }
+  }
+
+  private handleConfirmBranchCheck(data: string): void {
+    if (matchesKey(data, Key.escape) || matchesKey(data, "q")) {
+      this.onDone();
+      return;
+    }
+    if (matchesKey(data, Key.enter)) {
+      this.phase = "branch-status";
+      this.branchStatusLoading = true;
+      this.loadBranchStatusAsync();
+      this.invalidate();
+      this.tui.requestRender();
       return;
     }
   }
@@ -1329,7 +1345,7 @@ class GitComponent implements Component {
   /** Load the list of files changed on this branch compared to the fork point. */
   /** The phase to return to when leaving a sub-view (diff-viewer, result, etc.). */
   private get homePhase(): Phase {
-    return this.files.length === 0 ? "branch-status" : "select-files";
+    return this.files.length === 0 ? "confirm-branch-check" : "select-files";
   }
 
   /** Load branch status asynchronously (non-blocking git log). */
@@ -1978,6 +1994,15 @@ class GitComponent implements Component {
       lines.push("");
       lines.push(theme.fg("dim", "─".repeat(width)));
       lines.push(theme.fg("dim", "  enter/esc continue"));
+    } else if (this.phase === "confirm-branch-check") {
+      lines.push("");
+      lines.push(theme.fg("muted", "  No uncommitted changes."));
+      lines.push(
+        theme.fg("muted", "  Check branch status? This may take a moment."),
+      );
+      lines.push("");
+      lines.push(theme.fg("dim", "─".repeat(width)));
+      lines.push(theme.fg("dim", "  enter check branch status • esc quit"));
     } else if (this.phase === "branch-status") {
       lines.push(...this.renderBranchStatus(width));
       lines.push(theme.fg("dim", "─".repeat(width)));
