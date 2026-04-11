@@ -5,6 +5,9 @@ Pi extensions repo. Do not commit changes to git automatically.
 - Run `pnpm install` before development
 - Extensions live in `extensions/<name>/index.ts`
 - To develop an extension locally, run `pi -e ./extensions/<name>/`
+
+# Tenets
+
 - All tests must pass: run `pnpm test` after changes and fix errors
 - All code must compile: run `pnpm run typecheck` and fix any errors
 - All code must pass linting: run `pnpm run lint` and fix any errors
