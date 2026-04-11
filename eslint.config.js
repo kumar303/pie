@@ -1,5 +1,6 @@
 import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
+import vitest from "@vitest/eslint-plugin";
 
 export default tseslint.config(
   eslint.configs.recommended,
@@ -14,6 +15,13 @@ export default tseslint.config(
       ],
       // Allow explicit `any` — strict mode is off in tsconfig
       "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
+  {
+    files: ["extensions/**/*.test.ts"],
+    plugins: { vitest },
+    rules: {
+      "vitest/no-conditional-in-test": "error",
     },
   },
   {

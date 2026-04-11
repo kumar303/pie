@@ -123,12 +123,9 @@ describe("select-all toggle logic", () => {
     ];
     const selected = new Set<number>();
 
-    // Simulate the toggle logic from handleFileSelect
-    if (selected.size === files.length) {
-      selected.clear();
-    } else {
-      for (let i = 0; i < files.length; i++) selected.add(i);
-    }
+    // Simulate the toggle logic from handleFileSelect:
+    // none selected, so select all
+    for (let i = 0; i < files.length; i++) selected.add(i);
 
     expect(selected.size).toBe(2);
     expect(selected.has(0)).toBe(true);
@@ -136,17 +133,10 @@ describe("select-all toggle logic", () => {
   });
 
   it("deselects all files when all are selected", () => {
-    const files = [
-      { status: "M", path: "a.txt" },
-      { status: "??", path: "b.txt" },
-    ];
     const selected = new Set<number>([0, 1]);
 
-    if (selected.size === files.length) {
-      selected.clear();
-    } else {
-      for (let i = 0; i < files.length; i++) selected.add(i);
-    }
+    // all selected, so deselect all
+    selected.clear();
 
     expect(selected.size).toBe(0);
   });
@@ -968,10 +958,7 @@ describe("FilePathAutocompleteProvider", () => {
     execSync("git add .", { cwd: tmpDir });
     // Typing "ext" should not match "lib/extension.ts"
     const result = await provider.getSuggestions(["ext"], 0, 3, { signal });
-    if (result) {
-      const values = result.items.map((i) => i.value);
-      expect(values).not.toContain("lib/extension.ts");
-    }
+    expect(result).toBeNull();
   });
 
   it("matches files starting with special characters", async () => {
