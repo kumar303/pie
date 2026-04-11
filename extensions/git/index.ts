@@ -552,12 +552,11 @@ class GitComponent implements Component {
     for (const f of untrackedFiles) {
       try {
         const content = readFileSync(f, "utf-8");
-        const lines = content
-          .split("\n")
-          .map((l) => `+${l}`)
-          .join("\n");
+        const contentLines = content.split("\n");
+        const lines = contentLines.map((l) => `+${l}`).join("\n");
+        const hunkHeader = `@@ -0,0 +1,${contentLines.length} @@`;
         diffParts.push(
-          `diff --git a/${f} b/${f}\nnew file\n--- /dev/null\n+++ b/${f}\n${lines}`,
+          `diff --git a/${f} b/${f}\nnew file mode 100644\n--- /dev/null\n+++ b/${f}\n${hunkHeader}\n${lines}`,
         );
       } catch (err: any) {
         diffErrors.push(`Failed to read ${f}: ${err.message}`);
@@ -2436,26 +2435,27 @@ export function generateWorkingDiffOutput(opts: {
   for (const f of untrackedFiles) {
     try {
       const content = readFileSync(f, "utf-8");
+      const contentLines = content.split("\n");
+      const lineCount = contentLines.length;
+      const hunkHeader = `@@ -0,0 +1,${lineCount} @@`;
       if (useDelta) {
         // Raw diff format for delta to colorize
         const header =
           `diff --git a/${f} b/${f}\n` +
-          `new file\n` +
+          `new file mode 100644\n` +
           `--- /dev/null\n` +
-          `+++ b/${f}\n`;
-        const rawLines = content
-          .split("\n")
-          .map((l) => `+${l}`)
-          .join("\n");
+          `+++ b/${f}\n` +
+          `${hunkHeader}\n`;
+        const rawLines = contentLines.map((l) => `+${l}`).join("\n");
         diffOutput += (diffOutput ? "\n" : "") + header + rawLines;
       } else {
         const header =
           `\x1b[1mdiff --git a/${f} b/${f}\x1b[m\n` +
-          `\x1b[1mnew file\x1b[m\n` +
+          `\x1b[1mnew file mode 100644\x1b[m\n` +
           `\x1b[1m--- /dev/null\x1b[m\n` +
-          `\x1b[1m+++ b/${f}\x1b[m\n`;
-        const coloredLines = content
-          .split("\n")
+          `\x1b[1m+++ b/${f}\x1b[m\n` +
+          `\x1b[36m${hunkHeader}\x1b[m\n`;
+        const coloredLines = contentLines
           .map((l) => `\x1b[32m+${l}\x1b[m`)
           .join("\n");
         diffOutput += (diffOutput ? "\n" : "") + header + coloredLines;

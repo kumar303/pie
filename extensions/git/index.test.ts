@@ -577,6 +577,24 @@ describe("generateWorkingDiffOutput with delta", () => {
     expect(names).toEqual(["tracked.txt", "untracked.txt"]);
   });
 
+  it("includes hunk headers for untracked files so delta renders content", () => {
+    writeFileSync(join(tmpDir, "newfile.txt"), "line1\nline2\nline3");
+    process.chdir(tmpDir);
+
+    const result = generateWorkingDiffOutput({
+      hideWhitespace: true,
+      useDelta: false,
+    });
+
+    // The pseudo-diff for untracked files must include a @@ hunk header
+    // so that delta recognizes the +lines as additions and renders them.
+    // Without this, delta only shows "added: filename" with no content.
+    expect(result.diff).toMatch(/@@ -0,0 \+1,3 @@/);
+    expect(result.diff).toContain("+line1");
+    expect(result.diff).toContain("+line2");
+    expect(result.diff).toContain("+line3");
+  });
+
   it("falls back to git color when useDelta is false", () => {
     writeFileSync(join(tmpDir, "file.txt"), "original");
     execSync("git add file.txt && git commit -m init", { cwd: tmpDir });
