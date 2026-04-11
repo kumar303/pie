@@ -219,7 +219,7 @@ describe("handleList", () => {
     expect(select).not.toHaveBeenCalled();
   });
 
-  it("shows a select dialog with all prompts", async () => {
+  it("shows a select dialog with most recent prompt first", async () => {
     const store = memStore();
     pushPrompt(store, "alpha");
     pushPrompt(store, "beta");
@@ -228,8 +228,8 @@ describe("handleList", () => {
     await handleList(store, () => "", vi.fn(), vi.fn(), select);
 
     expect(select).toHaveBeenCalledWith("Yanked prompts (Enter to pop)", [
-      "1. alpha",
-      "2. beta",
+      "1. beta",
+      "2. alpha",
     ]);
   });
 
@@ -278,7 +278,7 @@ describe("handleList", () => {
     pushPrompt(store, "gamma");
     const setEditorText = vi.fn();
     const notify = vi.fn();
-    // User selects "2. beta" (index 1)
+    // User selects "2. beta" — shown as item 2 (second newest)
     const select = vi.fn().mockResolvedValue("2. beta");
 
     await handleList(store, () => "", setEditorText, notify, select);
@@ -303,8 +303,8 @@ describe("handleList", () => {
     const setEditorText = vi.fn().mockImplementation(() => {
       throw new Error("editor broke");
     });
-    // User selects "2. beta" (index 1)
-    const select = vi.fn().mockResolvedValue("2. beta");
+    // User selects "1. beta" (most recent, shown first)
+    const select = vi.fn().mockResolvedValue("1. beta");
 
     await handleList(store, () => "", setEditorText, notify, select);
 

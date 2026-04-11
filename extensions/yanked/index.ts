@@ -120,21 +120,24 @@ async function handleList(
     return;
   }
 
-  const items = prompts.map((p, i) => {
+  // Show most recent first
+  const reversed = [...prompts].reverse();
+  const items = reversed.map((p, i) => {
     const preview = p.text.length > 60 ? p.text.slice(0, 57) + "..." : p.text;
     const singleLine = preview.replace(/\n/g, "↵");
     return `${i + 1}. ${singleLine}`;
   });
 
-  // Show most recent last (pre-selected by pi's select dialog)
   const selected = await select("Yanked prompts (Enter to pop)", items);
   if (selected == null) return;
 
-  // Extract index from "N. preview" format
+  // Extract display index from "N. preview" format, then map back to store index
   const match = selected.match(/^(\d+)\./);
   if (!match) return;
-  const index = parseInt(match[1], 10) - 1;
-  if (isNaN(index)) return;
+  const displayIndex = parseInt(match[1], 10) - 1;
+  if (isNaN(displayIndex)) return;
+  // reversed[displayIndex] corresponds to prompts[prompts.length - 1 - displayIndex]
+  const index = prompts.length - 1 - displayIndex;
 
   const currentText = getEditorText();
   if (currentText.trim()) {
