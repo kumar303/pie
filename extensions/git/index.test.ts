@@ -298,6 +298,8 @@ import {
   pipeThroughDelta,
   buildFileIndex,
   remapFileIndex,
+  buildChunkIndex,
+  remapChunkIndex,
 } from "./index.ts";
 
 function getUntrackedFiles(): string[] {
@@ -527,6 +529,135 @@ describe("remapFileIndex", () => {
   });
 });
 
+describe("buildChunkIndex", () => {
+  it("finds delta chunk header lines by the bullet+line-number pattern", () => {
+    // Delta renders @@ hunk headers as a 3-line box:
+    //   ─────────────────┐   (top border)
+    //   • 10: class Foo { │  (content with bullet)
+    //   ─────────────────┘   (bottom border)
+    // We index the TOP border line so the scroll lands at the box start.
+    const lines = [
+      "\x1b[34m\u0394 foo.ts\x1b[0m", // line 0: file header
+      "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500", // line 1: file separator
+      "\u2500\u2500\u2500\u2500\u2510", // line 2: chunk top border
+      "\x1b[34m\u2022 10: class Foo {\x1b[0m \u2502", // line 3: chunk content
+      "\u2500\u2500\u2500\u2500\u2518", // line 4: chunk bottom border
+      "  bar() {", // line 5: code
+      "+    console.log('hi');", // line 6: added
+      "  }", // line 7
+      "", // line 8
+      "\u2500\u2500\u2500\u2500\u2510", // line 9: chunk top border
+      "\x1b[34m\u2022 51: export function helper() {\x1b[0m \u2502", // line 10: chunk content
+      "\u2500\u2500\u2500\u2500\u2518", // line 11: chunk bottom border
+      "  const x = 1;", // line 12
+      "+  const y = 2;", // line 13
+    ];
+
+    const index = buildChunkIndex(lines);
+    expect(index).toEqual([2, 9]);
+  });
+
+  it("returns empty array when no chunk headers exist", () => {
+    const lines = ["diff --git a/f b/f", "--- a/f", "+++ b/f", "+hello"];
+    expect(buildChunkIndex(lines)).toEqual([]);
+  });
+
+  it("handles ANSI codes wrapping the bullet line", () => {
+    const lines = [
+      "\x1b[34m\u2500\u2500\u2500\u2510\x1b[0m",
+      "\x1b[34m\u2022 100: function test() {\x1b[0m \x1b[34m\u2502\x1b[0m",
+      "\x1b[34m\u2500\u2500\u2500\u2518\x1b[0m",
+    ];
+    const index = buildChunkIndex(lines);
+    expect(index).toEqual([0]);
+  });
+
+  it("does not match lines without the bullet pattern", () => {
+    const lines = [
+      "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500", // just a separator, no ┐
+      "some code here",
+      "\u2022 not a chunk header without line number format",
+    ];
+    expect(buildChunkIndex(lines)).toEqual([]);
+  });
+});
+
+describe("remapChunkIndex", () => {
+  // Two file sections: app.ts (lines 0-9) and app.test.ts (lines 10-19)
+  const sections = [
+    { name: "app.ts", startLine: 0, endLine: 10 },
+    { name: "app.test.ts", startLine: 10, endLine: 20 },
+  ];
+  const preambleEnd = 0; // no preamble
+
+  it("remaps chunk indices to filtered line numbers", () => {
+    // Chunks at original lines 3 and 7, both in app.ts
+    const result = remapChunkIndex([3, 7], sections, preambleEnd, {
+      hideTests: false,
+      hiddenFiles: new Set(),
+    });
+    // No filtering, so line numbers stay the same
+    expect(result).toEqual([3, 7]);
+  });
+
+  it("drops chunks in hidden test files", () => {
+    // Chunk at line 5 (app.ts) and line 15 (app.test.ts)
+    const result = remapChunkIndex([5, 15], sections, preambleEnd, {
+      hideTests: true,
+      hiddenFiles: new Set(),
+    });
+    // Only the app.ts chunk survives
+    expect(result).toEqual([5]);
+  });
+
+  it("drops chunks in manually hidden files", () => {
+    const result = remapChunkIndex([5, 15], sections, preambleEnd, {
+      hideTests: false,
+      hiddenFiles: new Set(["app.ts"]),
+    });
+    // Only the app.test.ts chunk survives, remapped to line 5
+    // (app.ts section removed = 10 lines gone, so line 15 -> 5)
+    expect(result).toEqual([5]);
+  });
+
+  it("remaps line numbers when earlier sections are removed", () => {
+    // Three sections: a.ts (0-5), b.test.ts (5-10), c.ts (10-15)
+    const threeSections = [
+      { name: "a.ts", startLine: 0, endLine: 5 },
+      { name: "b.test.ts", startLine: 5, endLine: 10 },
+      { name: "c.ts", startLine: 10, endLine: 15 },
+    ];
+    // Chunk at line 12 in c.ts; hide b.test.ts (5 lines removed)
+    const result = remapChunkIndex([12], threeSections, 0, {
+      hideTests: true,
+      hiddenFiles: new Set(),
+    });
+    // c.ts starts at filtered line 5 (after a.ts), chunk was at offset 2 within c.ts
+    expect(result).toEqual([7]);
+  });
+
+  it("returns empty array when no chunks provided", () => {
+    expect(
+      remapChunkIndex([], sections, preambleEnd, {
+        hideTests: false,
+        hiddenFiles: new Set(),
+      }),
+    ).toEqual([]);
+  });
+
+  it("accounts for preamble lines", () => {
+    // 3 preamble lines before sections start at line 3
+    const sectionsWithPreamble = [{ name: "app.ts", startLine: 3, endLine: 8 }];
+    const result = remapChunkIndex([5], sectionsWithPreamble, 3, {
+      hideTests: false,
+      hiddenFiles: new Set(),
+    });
+    // Preamble occupies lines 0-2, app.ts starts at filtered line 3
+    // Original line 5 is offset 2 within app.ts -> filtered line 5
+    expect(result).toEqual([5]);
+  });
+});
+
 describe("generateWorkingDiffOutput with delta", () => {
   let tmpDir: string;
   let origCwd: string;
@@ -610,6 +741,45 @@ describe("generateWorkingDiffOutput with delta", () => {
     // Should have git's ANSI color codes
     // eslint-disable-next-line no-control-regex
     expect(result.diff).toMatch(/\x1b\[/);
+  });
+
+  it("returns a chunkIndex from delta output via buildChunkIndex", () => {
+    // Simulate delta-processed diff output with two chunk headers
+    // and verify buildChunkIndex produces the expected indices.
+    // generateWorkingDiffOutput calls buildChunkIndex on the delta
+    // output lines, so we test that contract directly.
+    const deltaLines = [
+      "\u0394 multi.txt", // line 0: file header
+      "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500", // line 1: file separator
+      "\u2500\u2500\u2500\u2500\u2510", // line 2: chunk 1 top border
+      "\u2022 3: class Foo { \u2502", // line 3: chunk 1 content
+      "\u2500\u2500\u2500\u2500\u2518", // line 4: chunk 1 bottom border
+      "-old line",
+      "+new line",
+      "",
+      "\u2500\u2500\u2500\u2500\u2510", // line 8: chunk 2 top border
+      "\u2022 50: function bar() { \u2502", // line 9: chunk 2 content
+      "\u2500\u2500\u2500\u2500\u2518", // line 10: chunk 2 bottom border
+      "-another old",
+      "+another new",
+    ];
+
+    const chunkIndex = buildChunkIndex(deltaLines);
+    expect(chunkIndex).toEqual([2, 8]);
+  });
+
+  it("returns an empty chunkIndex when delta is not used", () => {
+    writeFileSync(join(tmpDir, "file.txt"), "original");
+    execSync("git add file.txt && git commit -m init", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "file.txt"), "modified");
+    process.chdir(tmpDir);
+
+    const result = generateWorkingDiffOutput({
+      hideWhitespace: true,
+      useDelta: false,
+    });
+
+    expect(result.chunkIndex).toEqual([]);
   });
 });
 

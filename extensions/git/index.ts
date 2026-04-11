@@ -178,10 +178,12 @@ class GitComponent implements Component {
   private diffLines: string[] = [];
   private diffScrollOffset = 0;
   private diffFileIndex: { line: number; name: string }[] = []; // file boundaries in diff
+  private diffChunkIndex: number[] = []; // chunk (hunk) boundaries (delta only)
 
   // Filtered diff (active view, respects hideTests toggle)
   private activeDiffLines: string[] = [];
   private activeDiffFileIndex: { line: number; name: string }[] = [];
+  private activeDiffChunkIndex: number[] = [];
   private hideTests = false;
   private hideWhitespace = true;
   private hiddenFiles: Set<string> = new Set();
@@ -1155,6 +1157,7 @@ class GitComponent implements Component {
     ) {
       this.activeDiffLines = this.diffLines;
       this.activeDiffFileIndex = this.diffFileIndex;
+      this.activeDiffChunkIndex = this.diffChunkIndex;
       return;
     }
 
@@ -1200,6 +1203,13 @@ class GitComponent implements Component {
 
     this.activeDiffLines = filteredLines;
     this.activeDiffFileIndex = filteredFileIndex;
+
+    this.activeDiffChunkIndex = remapChunkIndex(
+      this.diffChunkIndex,
+      sections,
+      firstFileStart,
+      { hideTests: this.hideTests, hiddenFiles: this.hiddenFiles },
+    );
   }
 
   /** Set up diff viewer state from raw diff output and switch to diff phase.
@@ -1210,6 +1220,7 @@ class GitComponent implements Component {
     diffOutput: string,
     emptyMessage: string,
     fileIndex?: { line: number; name: string }[],
+    chunkIndex?: number[],
   ): void {
     if (!diffOutput.trim()) {
       this.ctx.ui.notify(emptyMessage, "info");
@@ -1239,6 +1250,8 @@ class GitComponent implements Component {
       }
     }
 
+    this.diffChunkIndex = chunkIndex ?? [];
+
     this.recomputeActiveDiff();
     this.phase = "diff-viewer";
     this.invalidate();
@@ -1249,6 +1262,7 @@ class GitComponent implements Component {
   private generateWorkingDiff(): {
     diff: string;
     fileIndex: { line: number; name: string }[];
+    chunkIndex: number[];
   } {
     const result = generateWorkingDiffOutput({
       hideWhitespace: this.hideWhitespace,
@@ -1256,13 +1270,18 @@ class GitComponent implements Component {
     for (const error of result.errors) {
       this.ctx.ui.notify(error, "error");
     }
-    return { diff: result.diff, fileIndex: result.fileIndex };
+    return {
+      diff: result.diff,
+      fileIndex: result.fileIndex,
+      chunkIndex: result.chunkIndex,
+    };
   }
 
   /** Generate the diff output for the branch (compared to fork point). */
   private generateBranchDiff(): {
     diff: string;
     fileIndex: { line: number; name: string }[];
+    chunkIndex: number[];
   } | null {
     const forkPoint = this.getForkPoint();
     if (!forkPoint) {
@@ -1287,6 +1306,7 @@ class GitComponent implements Component {
         },
       );
       const fileIndex = buildFileIndex(output);
+      let chunkIndex: number[] = [];
       if (useDelta) {
         const delta = pipeThroughDelta(output, { forceAvailable: true });
         if (delta.error) {
@@ -1294,8 +1314,9 @@ class GitComponent implements Component {
         }
         output = delta.text;
         remapFileIndex(fileIndex, output);
+        chunkIndex = buildChunkIndex(output.split("\n"));
       }
-      return { diff: output, fileIndex };
+      return { diff: output, fileIndex, chunkIndex };
     } catch (err: any) {
       this.ctx.ui.notify(
         `Branch diff failed: ${err.stderr?.trim() || err.message}`,
@@ -1375,7 +1396,12 @@ class GitComponent implements Component {
   private openDiffViewer(): void {
     this.diffMode = "working";
     const result = this.generateWorkingDiff();
-    this.showDiff(result.diff, "No diff to show", result.fileIndex);
+    this.showDiff(
+      result.diff,
+      "No diff to show",
+      result.fileIndex,
+      result.chunkIndex,
+    );
   }
 
   private openBranchDiffViewer(): void {
@@ -1386,6 +1412,7 @@ class GitComponent implements Component {
       result.diff,
       `No diff compared to base branch`,
       result.fileIndex,
+      result.chunkIndex,
     );
   }
 
@@ -1394,6 +1421,7 @@ class GitComponent implements Component {
     let result: {
       diff: string;
       fileIndex: { line: number; name: string }[];
+      chunkIndex: number[];
     } | null;
     if (this.diffMode === "branch") {
       result = this.generateBranchDiff();
@@ -1403,7 +1431,12 @@ class GitComponent implements Component {
     }
     // Preserve scroll position as much as possible
     const prevScroll = this.diffScrollOffset;
-    this.showDiff(result.diff, "No diff to show", result.fileIndex);
+    this.showDiff(
+      result.diff,
+      "No diff to show",
+      result.fileIndex,
+      result.chunkIndex,
+    );
     this.diffScrollOffset = Math.min(
       prevScroll,
       Math.max(0, this.activeDiffLines.length - 1),
@@ -1571,6 +1604,30 @@ class GitComponent implements Component {
       for (let i = this.activeDiffFileIndex.length - 1; i >= 0; i--) {
         if (this.activeDiffFileIndex[i].line < this.diffScrollOffset) {
           this.diffScrollOffset = this.activeDiffFileIndex[i].line;
+          this.invalidate();
+          this.tui.requestRender();
+          return;
+        }
+      }
+      return;
+    }
+    // c = jump to next chunk (delta only)
+    if (matchesKey(data, "c")) {
+      for (const line of this.activeDiffChunkIndex) {
+        if (line > this.diffScrollOffset) {
+          this.diffScrollOffset = line;
+          this.invalidate();
+          this.tui.requestRender();
+          return;
+        }
+      }
+      return;
+    }
+    // C = jump to previous chunk (delta only)
+    if (matchesKey(data, Key.shift("c"))) {
+      for (let i = this.activeDiffChunkIndex.length - 1; i >= 0; i--) {
+        if (this.activeDiffChunkIndex[i] < this.diffScrollOffset) {
+          this.diffScrollOffset = this.activeDiffChunkIndex[i];
           this.invalidate();
           this.tui.requestRender();
           return;
@@ -2060,7 +2117,9 @@ class GitComponent implements Component {
           : "h hide file";
       let legend: string;
       if (diffFocused) {
-        const helpLeft = `d↓ u↑ · g/G top/bottom · ↑↓ scroll · f/F next/prev file · e edit · p path · x explain file · X explain diff · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`;
+        const chunkHint =
+          this.activeDiffChunkIndex.length > 0 ? " · c/C next/prev chunk" : "";
+        const helpLeft = `d↓ u↑ · g/G top/bottom · ↑↓ scroll · f/F next/prev file${chunkHint} · e edit · p path · x explain file · X explain diff · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`;
         legend = `  ${helpLeft}  │  tab prompt · esc quit  ${position}`;
       } else {
         const hints = `enter send · opt+enter follow-up · \\+enter newline · tab complete · ↑↓ history · ^C clear · esc back`;
@@ -2377,6 +2436,65 @@ export function remapFileIndex(
   }
 }
 
+/**
+ * Remap chunk indices when sections are filtered (e.g. hideTests, hiddenFiles).
+ * Chunks that fall within excluded sections are dropped; surviving ones get
+ * new line numbers matching the filtered output.
+ */
+export function remapChunkIndex(
+  chunkIndex: number[],
+  sections: { name: string; startLine: number; endLine: number }[],
+  preambleEnd: number,
+  opts: { hideTests: boolean; hiddenFiles: Set<string> },
+): number[] {
+  if (chunkIndex.length === 0) return [];
+  const testPattern = /test/i;
+  const lineMap = new Map<number, number>();
+  let filteredIdx = preambleEnd; // preamble lines are 1:1
+  for (const section of sections) {
+    if (opts.hideTests && testPattern.test(section.name)) continue;
+    if (opts.hiddenFiles.has(section.name)) continue;
+    for (let i = section.startLine; i < section.endLine; i++) {
+      lineMap.set(i, filteredIdx);
+      filteredIdx++;
+    }
+  }
+  const result: number[] = [];
+  for (const chunkLine of chunkIndex) {
+    const mapped = lineMap.get(chunkLine);
+    if (mapped !== undefined) {
+      result.push(mapped);
+    }
+  }
+  return result;
+}
+
+/**
+ * Build a chunk index from delta-processed diff output.
+ * Delta renders @@ hunk headers as a 3-line box:
+ *   ─────────────────┐   (top border with ┐)
+ *   • 10: class Foo { │  (bullet + line number)
+ *   ─────────────────┘   (bottom border with ┘)
+ *
+ * We detect the bullet line (• followed by a number and colon) and return
+ * the line index of the top border (one line above) so scrolling lands
+ * at the start of the box.
+ */
+export function buildChunkIndex(lines: string[]): number[] {
+  const index: number[] = [];
+  /* eslint-disable no-control-regex */
+  const bulletPattern = /^\u2022 \d+:/;
+  for (let i = 0; i < lines.length; i++) {
+    const stripped = lines[i].replace(/\x1b\[[0-9;]*m/g, "").trim();
+    if (bulletPattern.test(stripped) && i > 0) {
+      // The top border is the line before the bullet line
+      index.push(i - 1);
+    }
+  }
+  /* eslint-enable no-control-regex */
+  return index;
+}
+
 // --- Exported diff generation (used by tests) ---
 
 const DIFF_MAX_BUFFER = 50 * 1024 * 1024; // 50 MB
@@ -2395,6 +2513,7 @@ export function generateWorkingDiffOutput(opts: {
   diff: string;
   errors: string[];
   fileIndex: { line: number; name: string }[];
+  chunkIndex: number[];
 } {
   const useDelta = opts.useDelta ?? isDeltaAvailable();
   let diffOutput = "";
@@ -2469,6 +2588,7 @@ export function generateWorkingDiffOutput(opts: {
   const fileIndex = buildFileIndex(diffOutput);
 
   // Pipe the entire diff through delta for syntax highlighting
+  let chunkIndex: number[] = [];
   if (useDelta) {
     const delta = pipeThroughDelta(diffOutput, { forceAvailable: true });
     if (delta.error) {
@@ -2478,9 +2598,10 @@ export function generateWorkingDiffOutput(opts: {
     // Rebuild line positions: delta changes line count, so find each file
     // name in the delta output. Delta renders file names in its headers.
     remapFileIndex(fileIndex, diffOutput);
+    chunkIndex = buildChunkIndex(diffOutput.split("\n"));
   }
 
-  return { diff: diffOutput, errors, fileIndex };
+  return { diff: diffOutput, errors, fileIndex, chunkIndex };
 }
 
 // --- File path autocomplete provider ---
