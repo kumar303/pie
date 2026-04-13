@@ -18,6 +18,7 @@ All code is licensed under [WTFPL](LICENSE).
 | [git](extensions/git/)                                       | View git diffs and re-prompt the agent. Invoke with `/git`.                                                                |
 | [no-sleep-while-working](extensions/no-sleep-while-working/) | Prevents your Mac from sleeping while pi is actively working on a task.                                                    |
 | [pie-kumar303-config](extensions/pie-kumar303-config/)       | Extension manager for this repo. Invoke with `/pie-kumar303-config` to selectively install/remove extensions via symlinks. |
+| [queue](extensions/queue/)                                   | Send your agent a list of prompts, one at a time. Invoke with `/queue <key>`.                                              |
 
 ## Install
 
