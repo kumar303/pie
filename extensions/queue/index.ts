@@ -128,8 +128,11 @@ export function formatPromptLines(
   text: string,
   width: number,
   maxLines: number = 5,
+  gutterWidth?: number,
 ): string[] {
-  const gutter = `${prefix}${num} `;
+  const rawGutter = `${prefix}${num} `;
+  const gutter =
+    gutterWidth != null ? rawGutter.padEnd(gutterWidth) : rawGutter;
   const indent = " ".repeat(gutter.length);
   const contentWidth = Math.max(1, width - gutter.length);
 
@@ -231,11 +234,12 @@ export function buildEditContextLines(
   const before: string[] = [];
   const after: string[] = [];
 
+  const gw = computeGutterWidth(prompts.length);
   for (let i = 0; i < prompts.length; i++) {
     if (i === editingIndex) continue;
     const prefix = "  ";
     const num = `${i + 1}.`;
-    const lines = formatPromptLines(prefix, num, prompts[i], width);
+    const lines = formatPromptLines(prefix, num, prompts[i], width, 5, gw);
     if (i < editingIndex) {
       before.push(...lines);
     } else {
@@ -565,6 +569,7 @@ function createListView(
     }
     lines.push("");
 
+    const gw = computeGutterWidth(state.prompts.length);
     for (let i = 0; i < state.prompts.length; i++) {
       const prefix = i === state.cursor ? "▸ " : "  ";
       const num = `${i + 1}.`;
@@ -573,6 +578,8 @@ function createListView(
         num,
         state.prompts[i],
         lastWidth,
+        5,
+        gw,
       );
       for (const pl of promptLines) {
         lines.push(i === state.cursor ? theme.fg("accent", pl) : pl);
@@ -596,7 +603,7 @@ function createListView(
   let finishEdit: (text?: string) => void = () => {};
 
   const openEditor = (initialText: string) => {
-    const padding = computeGutterWidth(state.editingIndex + 1);
+    const padding = computeGutterWidth(state.prompts.length) + 1; // +1 for Text paddingX
     editor = new Editor(tui, editorTheme, { paddingX: padding });
     editor.focused = true;
     editor.disableSubmit = true;
@@ -628,14 +635,22 @@ function createListView(
           state.editingIndex + 1,
           state.prompts.length,
         );
-        const headerLines = [theme.bold(theme.fg("accent", headerText)), ""];
+        const headerLines = [
+          theme.bold(theme.fg("accent", " " + headerText)),
+          "",
+        ];
         const { before, after } = buildEditContextLines(
           state.prompts,
           state.editingIndex,
           w,
         );
-        const dimBefore = before.map((l: string) => theme.fg("dim", l));
-        const dimAfter = after.map((l: string) => theme.fg("dim", l));
+        const listPadding = " "; // match the Text component's paddingX=1
+        const dimBefore = before.map((l: string) =>
+          theme.fg("dim", listPadding + l),
+        );
+        const dimAfter = after.map((l: string) =>
+          theme.fg("dim", listPadding + l),
+        );
         const editorLines = editor.render(w);
         return [...headerLines, ...dimBefore, ...editorLines, ...dimAfter];
       }
