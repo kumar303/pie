@@ -287,6 +287,32 @@ describe("ListState", () => {
     expect(state.prompts.length).toBe(4);
   });
 
+  it("transposes current line with the one above it", () => {
+    state.next(); // cursor = 1
+    state.transpose();
+    expect(state.prompts).toEqual(["prompt B", "prompt A", "prompt C"]);
+  });
+
+  it("moves cursor up after transpose", () => {
+    state.next(); // cursor = 1
+    state.transpose();
+    expect(state.cursor).toBe(0);
+  });
+
+  it("does nothing when transposing on first line", () => {
+    state.transpose();
+    expect(state.prompts).toEqual(["prompt A", "prompt B", "prompt C"]);
+    expect(state.cursor).toBe(0);
+  });
+
+  it("transposes from the last line", () => {
+    state.next();
+    state.next(); // cursor = 2
+    state.transpose();
+    expect(state.prompts).toEqual(["prompt A", "prompt C", "prompt B"]);
+    expect(state.cursor).toBe(1);
+  });
+
   it("removes placeholder on empty add save", () => {
     state.add();
     state.saveEdit("");

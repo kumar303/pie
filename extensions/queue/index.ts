@@ -256,6 +256,14 @@ export class ListState {
     }
   }
 
+  transpose(): void {
+    if (this.cursor <= 0) return;
+    const tmp = this.prompts[this.cursor];
+    this.prompts[this.cursor] = this.prompts[this.cursor - 1];
+    this.prompts[this.cursor - 1] = tmp;
+    this.cursor--;
+  }
+
   edit(): void {
     this.phase = "edit";
     this.editingIndex = this.cursor;
@@ -531,7 +539,7 @@ function createListView(
 
   const renderList = () => {
     const lines: string[] = [];
-    const header = `Queue: ${currentKey} (${state.prompts.length}) — enter:submit  e:edit  ↑/↓:nav  d:delete  a:add  S:save  c:copy  esc:cancel`;
+    const header = `Queue: ${currentKey} (${state.prompts.length}) — enter:submit  e:edit  ↑/↓:nav  d:delete  a:add  t:transpose  S:save  c:copy  esc:cancel`;
     lines.push(theme.bold(theme.fg("accent", header)));
     if (flashMessage) {
       lines.push(theme.fg("success", `  ${flashMessage}`));
@@ -696,6 +704,11 @@ function createListView(
 
       if (matchesKey(data, "d")) {
         state.delete();
+        return;
+      }
+
+      if (matchesKey(data, "t")) {
+        state.transpose();
         return;
       }
 
