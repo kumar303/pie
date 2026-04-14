@@ -180,6 +180,36 @@ export function buildEditHeader(current: number, total: number): string {
   return `Editing prompt ${current} of ${total} — enter:save  ^C:clear  esc:cancel`;
 }
 
+// ── Edit context lines ─────────────────────────────────────────────
+
+/**
+ * Build the formatted lines for prompts surrounding the one being edited.
+ * Returns lines for prompts before and after the editing index,
+ * using consistent numbering from the full list.
+ */
+export function buildEditContextLines(
+  prompts: string[],
+  editingIndex: number,
+  width: number,
+): { before: string[]; after: string[] } {
+  const before: string[] = [];
+  const after: string[] = [];
+
+  for (let i = 0; i < prompts.length; i++) {
+    if (i === editingIndex) continue;
+    const prefix = "  ";
+    const num = `${i + 1}.`;
+    const lines = formatPromptLines(prefix, num, prompts[i], width);
+    if (i < editingIndex) {
+      before.push(...lines);
+    } else {
+      after.push(...lines);
+    }
+  }
+
+  return { before, after };
+}
+
 // ── ListState ────────────────────────────────────────────────────────
 
 export class ListState {
@@ -311,6 +341,35 @@ export class QueueRunner {
   }
 }
 
+// ── startQueue ─────────────────────────────────────────────────────
+
+export interface StartQueueDeps {
+  notify: (message: string, level: "info" | "error") => void;
+  runnerCtx: QueueRunnerCtx;
+}
+
+export type StartQueueResult =
+  | { runner: QueueRunner; error?: undefined }
+  | { runner?: undefined; error: string };
+
+export async function startQueue(
+  prompts: string[],
+  existingRunner: QueueRunner | null,
+  deps: StartQueueDeps,
+): Promise<StartQueueResult> {
+  if (existingRunner?.isRunning()) {
+    const error =
+      "A queue is already running. Use /queue :abort to cancel it first.";
+    deps.notify(error, "error");
+    return { error };
+  }
+
+  const runner = new QueueRunner(deps.runnerCtx);
+  await runner.start(addCriteriaHeaders(prompts));
+  deps.notify(`Queue started with ${prompts.length} prompts`, "info");
+  return { runner };
+}
+
 // ── Extension entry point ────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
@@ -398,15 +457,20 @@ export default function (pi: ExtensionAPI) {
 
       if (!result || result.prompts.length === 0) return;
 
-      runner = new QueueRunner({
-        waitForIdle: () => ctx.waitForIdle(),
-        sendUserMessage: (text) =>
-          pi.sendUserMessage(text, { deliverAs: "followUp" }),
-        setStatus: (text) => ctx.ui.setStatus("queue", text),
-        abort: () => ctx.abort(),
+      const startResult = await startQueue(result.prompts, runner, {
+        notify: (msg, level) => ctx.ui.notify(msg, level),
+        runnerCtx: {
+          waitForIdle: () => ctx.waitForIdle(),
+          sendUserMessage: (text) =>
+            pi.sendUserMessage(text, { deliverAs: "followUp" }),
+          setStatus: (text) => ctx.ui.setStatus("queue", text),
+          abort: () => ctx.abort(),
+        },
       });
 
-      await runner.start(addCriteriaHeaders(result.prompts));
+      if (startResult.runner) {
+        runner = startResult.runner;
+      }
     },
   });
 }
@@ -502,7 +566,23 @@ function createListView(
           state.prompts.length,
         );
         const headerLines = [theme.bold(theme.fg("accent", headerText)), ""];
-        return [...headerLines, ...editor.render(w)];
+        const { before, after } = buildEditContextLines(
+          state.prompts,
+          state.editingIndex,
+          w,
+        );
+        const dimBefore = before.map((l: string) => theme.fg("dim", l));
+        const dimAfter = after.map((l: string) => theme.fg("dim", l));
+        const editorLines = editor.render(w);
+        const editPrefix = `▸ ${state.editingIndex + 1}. `;
+        const editLabel = [theme.fg("accent", editPrefix)];
+        return [
+          ...headerLines,
+          ...dimBefore,
+          ...editLabel,
+          ...editorLines,
+          ...dimAfter,
+        ];
       }
       renderList();
       const listLines = text.render(w);

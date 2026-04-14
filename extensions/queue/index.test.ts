@@ -8,7 +8,10 @@ import {
   type QueueRunnerCtx,
   createFinishEdit,
   buildEditHeader,
+  buildEditContextLines,
   validateKeyName,
+  startQueue,
+  type StartQueueDeps,
 } from "./index.js";
 
 // ── Argument parsing ─────────────────────────────────────────────────
@@ -322,6 +325,137 @@ describe("createFinishEdit", () => {
     const finish = createFinishEdit(state, () => "fallback");
     finish();
     expect(state.prompts[0]).toBe("fallback");
+  });
+});
+
+// ── buildEditContextLines ────────────────────────────────────────────
+
+describe("buildEditContextLines", () => {
+  it("returns prompts before and after the editing index", () => {
+    const prompts = ["A", "B", "C", "D", "E"];
+    const { before, after } = buildEditContextLines(prompts, 2, 80);
+    // Before should have prompts 0 and 1
+    expect(before.some((l) => l.includes("1."))).toBe(true);
+    expect(before.some((l) => l.includes("A"))).toBe(true);
+    expect(before.some((l) => l.includes("2."))).toBe(true);
+    expect(before.some((l) => l.includes("B"))).toBe(true);
+    // After should have prompts 3 and 4
+    expect(after.some((l) => l.includes("4."))).toBe(true);
+    expect(after.some((l) => l.includes("D"))).toBe(true);
+    expect(after.some((l) => l.includes("5."))).toBe(true);
+    expect(after.some((l) => l.includes("E"))).toBe(true);
+  });
+
+  it("returns empty before when editing the first prompt", () => {
+    const prompts = ["A", "B", "C"];
+    const { before, after } = buildEditContextLines(prompts, 0, 80);
+    expect(before).toEqual([]);
+    expect(after.some((l) => l.includes("2."))).toBe(true);
+    expect(after.some((l) => l.includes("3."))).toBe(true);
+  });
+
+  it("returns empty after when editing the last prompt", () => {
+    const prompts = ["A", "B", "C"];
+    const { before, after } = buildEditContextLines(prompts, 2, 80);
+    expect(before.some((l) => l.includes("1."))).toBe(true);
+    expect(before.some((l) => l.includes("2."))).toBe(true);
+    expect(after).toEqual([]);
+  });
+
+  it("excludes the editing index from both before and after", () => {
+    const prompts = ["A", "B", "C"];
+    const { before, after } = buildEditContextLines(prompts, 1, 80);
+    const all = [...before, ...after].join("\n");
+    // Should not contain the prompt at index 1 ("B")
+    // but should contain prompts 0 and 2
+    expect(before.some((l) => l.includes("A"))).toBe(true);
+    expect(after.some((l) => l.includes("C"))).toBe(true);
+    // The editing prompt "B" should not appear
+    expect(all).not.toContain("B");
+  });
+
+  it("uses consistent numbering with the full list", () => {
+    const prompts = ["X", "Y", "Z"];
+    const { before, after } = buildEditContextLines(prompts, 1, 80);
+    // Prompt 0 should be numbered "1."
+    expect(before.some((l) => l.includes("1."))).toBe(true);
+    // Prompt 2 should be numbered "3."
+    expect(after.some((l) => l.includes("3."))).toBe(true);
+  });
+
+  it("uses indented prefix (not cursor) for context prompts", () => {
+    const prompts = ["A", "B", "C"];
+    const { before, after } = buildEditContextLines(prompts, 1, 80);
+    // Should use "  " prefix (no cursor indicator)
+    expect(before[0]).toMatch(/^ {2}\d+\./);
+    expect(after[0]).toMatch(/^ {2}\d+\./);
+  });
+});
+
+// ── startQueue ─────────────────────────────────────────────────────
+
+describe("startQueue", () => {
+  function makeDeps(overrides?: Partial<StartQueueDeps>): StartQueueDeps {
+    return {
+      notify: vi.fn(),
+      runnerCtx: {
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+        sendUserMessage: vi.fn(),
+        setStatus: vi.fn(),
+        abort: vi.fn(),
+      },
+      ...overrides,
+    };
+  }
+
+  it("notifies the user that the queue has been started", async () => {
+    const deps = makeDeps();
+    const { runner } = await startQueue(["A", "B"], null, deps);
+    expect(deps.notify).toHaveBeenCalledWith(
+      expect.stringContaining("2"),
+      "info",
+    );
+    // Clean up
+    runner.abort();
+  });
+
+  it("returns a new runner", async () => {
+    const deps = makeDeps();
+    const { runner } = await startQueue(["A", "B"], null, deps);
+    expect(runner.isRunning()).toBe(true);
+    runner.abort();
+  });
+
+  it("returns an error when a queue is already running", async () => {
+    const deps = makeDeps();
+    const { runner: first } = await startQueue(["A", "B"], null, deps);
+    const result = await startQueue(["C", "D"], first, deps);
+    expect(result.error).toBeDefined();
+    expect(deps.notify).toHaveBeenCalledWith(
+      expect.stringContaining("abort"),
+      "error",
+    );
+    first.abort();
+  });
+
+  it("does not create a new runner when one is already running", async () => {
+    const deps = makeDeps();
+    const { runner: first } = await startQueue(["A", "B"], null, deps);
+    const result = await startQueue(["C", "D"], first, deps);
+    expect(result.runner).toBeUndefined();
+    first.abort();
+  });
+
+  it("allows starting a new queue when previous runner has finished", async () => {
+    const deps = makeDeps();
+    const { runner: first } = await startQueue(["A"], null, deps);
+    await first.onAgentEnd(); // finishes
+    await first.onAgentEnd(); // fully done
+    expect(first.isRunning()).toBe(false);
+    const result = await startQueue(["B", "C"], first, deps);
+    expect(result.runner).toBeDefined();
+    expect(result.error).toBeUndefined();
+    result.runner!.abort();
   });
 });
 
