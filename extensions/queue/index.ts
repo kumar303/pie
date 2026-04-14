@@ -54,6 +54,7 @@ export type QueueParseResult =
   | { kind: "key"; key: string }
   | { kind: "abort" }
   | { kind: "delete"; key: string }
+  | { kind: "rename"; oldKey: string; newKey: string }
   | { kind: "invalid"; reason: string };
 
 // ── Validation ───────────────────────────────────────────────────────
@@ -83,6 +84,22 @@ export function parseQueueArgs(args: string): QueueParseResult {
     const error = validateKeyName(key);
     if (error) return { kind: "invalid", reason: error };
     return { kind: "delete", key };
+  }
+  if (trimmed.startsWith(":rename")) {
+    const rest = trimmed.slice(":rename".length).trim();
+    const parts = rest.split(/\s+/);
+    if (!parts[0])
+      return {
+        kind: "invalid",
+        reason: ":rename requires an existing key and a new key",
+      };
+    if (!parts[1])
+      return { kind: "invalid", reason: ":rename requires a new key name" };
+    const oldError = validateKeyName(parts[0]);
+    if (oldError) return { kind: "invalid", reason: oldError };
+    const newError = validateKeyName(parts[1]);
+    if (newError) return { kind: "invalid", reason: newError };
+    return { kind: "rename", oldKey: parts[0], newKey: parts[1] };
   }
   const error = validateKeyName(trimmed);
   if (error) return { kind: "invalid", reason: error };
@@ -404,6 +421,11 @@ export default function (pi: ExtensionAPI) {
           label: `:delete ${k}`,
           description: "Delete saved queue",
         })),
+        ...keys.map((k) => ({
+          value: `:rename ${k} `,
+          label: `:rename ${k}`,
+          description: "Rename saved queue",
+        })),
       ];
       return options.filter((o) => o.value.startsWith(trimmed));
     },
@@ -438,6 +460,18 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify(`Deleted queue: ${parsed.key}`, "info");
         } else {
           ctx.ui.notify(`Unknown key: ${parsed.key}`, "error");
+        }
+        return;
+      }
+
+      if (parsed.kind === "rename") {
+        if (store.rename(parsed.oldKey, parsed.newKey)) {
+          ctx.ui.notify(
+            `Renamed queue: ${parsed.oldKey} → ${parsed.newKey}`,
+            "info",
+          );
+        } else {
+          ctx.ui.notify(`Unknown key: ${parsed.oldKey}`, "error");
         }
         return;
       }

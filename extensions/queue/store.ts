@@ -33,6 +33,7 @@ export interface StoreIO {
   load(key: string): string[] | undefined;
   save(key: string, prompts: string[]): void;
   delete(key: string): boolean;
+  rename(oldKey: string, newKey: string): boolean;
   listSnapshots(): Snapshot[];
 }
 
@@ -118,6 +119,17 @@ export function createFileStore(dir: string = DEFAULT_STORE_DIR): StoreIO {
 
       takeSnapshot(queues);
       delete queues[key];
+      writeQueues(queues);
+      return true;
+    },
+
+    rename(oldKey: string, newKey: string): boolean {
+      const queues = readQueues();
+      if (!queues[oldKey]) return false;
+
+      takeSnapshot(queues);
+      queues[newKey] = queues[oldKey];
+      delete queues[oldKey];
       writeQueues(queues);
       return true;
     },

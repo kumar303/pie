@@ -27,6 +27,12 @@ function memStore(initial: Record<string, string[]> = {}): StoreIO {
       keys.delete(key);
       return true;
     },
+    rename: (oldKey, newKey) => {
+      if (!keys.has(oldKey)) return false;
+      keys.set(newKey, keys.get(oldKey)!);
+      keys.delete(oldKey);
+      return true;
+    },
     listSnapshots: () => [],
   };
 }
@@ -169,6 +175,34 @@ describe("createFileStore", () => {
     store.save("k", ["A"]);
     const files = readdirSync(tmpDir).filter((f) => !f.endsWith(".tmp"));
     expect(files).toEqual(["queues.json"]);
+  });
+
+  it("renames a key", () => {
+    store.save("old-name", ["A", "B"]);
+    const result = store.rename("old-name", "new-name");
+    expect(result).toBe(true);
+    expect(store.load("old-name")).toBeUndefined();
+    expect(store.load("new-name")).toEqual(["A", "B"]);
+  });
+
+  it("returns false when renaming a non-existent key", () => {
+    expect(store.rename("nope", "new-name")).toBe(false);
+  });
+
+  it("creates a snapshot before renaming", () => {
+    store.save("old", ["A"]);
+    store.rename("old", "new");
+    const snapshots = store.listSnapshots();
+    expect(snapshots.length).toBe(1);
+    expect(snapshots[0].queues).toEqual({ old: ["A"] });
+  });
+
+  it("overwrites destination key when renaming", () => {
+    store.save("src", ["A"]);
+    store.save("dst", ["B"]);
+    store.rename("src", "dst");
+    expect(store.load("dst")).toEqual(["A"]);
+    expect(store.load("src")).toBeUndefined();
   });
 
   it("limits total snapshots to 100, removing oldest", () => {

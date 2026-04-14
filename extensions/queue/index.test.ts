@@ -88,6 +88,50 @@ describe("parseQueueArgs", () => {
       reason: expect.stringContaining("spaces"),
     });
   });
+
+  it("parses ':rename old-key new-key' as rename", () => {
+    expect(parseQueueArgs(":rename old-key new-key")).toEqual({
+      kind: "rename",
+      oldKey: "old-key",
+      newKey: "new-key",
+    });
+  });
+
+  it("trims whitespace around :rename args", () => {
+    expect(parseQueueArgs("  :rename   old-key   new-key  ")).toEqual({
+      kind: "rename",
+      oldKey: "old-key",
+      newKey: "new-key",
+    });
+  });
+
+  it("returns invalid for :rename without arguments", () => {
+    expect(parseQueueArgs(":rename")).toEqual({
+      kind: "invalid",
+      reason: expect.stringContaining("existing"),
+    });
+  });
+
+  it("returns invalid for :rename with only one argument", () => {
+    expect(parseQueueArgs(":rename old-key")).toEqual({
+      kind: "invalid",
+      reason: expect.stringContaining("new"),
+    });
+  });
+
+  it("returns invalid for :rename with invalid old key", () => {
+    expect(parseQueueArgs(":rename bad/key new-key")).toEqual({
+      kind: "invalid",
+      reason: expect.any(String),
+    });
+  });
+
+  it("returns invalid for :rename with invalid new key", () => {
+    expect(parseQueueArgs(":rename old-key bad/key")).toEqual({
+      kind: "invalid",
+      reason: expect.any(String),
+    });
+  });
 });
 
 // ── validateKeyName ──────────────────────────────────────────────────
