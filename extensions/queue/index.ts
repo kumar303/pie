@@ -213,7 +213,7 @@ export function computeGutterWidth(promptNumber: number): number {
 // ── Edit header ──────────────────────────────────────────────────────
 
 export function buildEditHeader(current: number, total: number): string {
-  return `Editing prompt ${current} of ${total} — enter:save  shift+enter:newline  ^C:clear  esc:cancel`;
+  return `Editing prompt ${current} of ${total} — shift+enter:newline  ^C:clear  esc:return`;
 }
 
 // ── Edit context lines ─────────────────────────────────────────────
@@ -599,6 +599,7 @@ function createListView(
     const padding = computeGutterWidth(state.editingIndex + 1);
     editor = new Editor(tui, editorTheme, { paddingX: padding });
     editor.focused = true;
+    editor.disableSubmit = true;
     editor.setText(initialText);
     finishEdit = createFinishEdit(state, () => editor?.getText() ?? "");
     editor.onSubmit = (submitText: string) => {

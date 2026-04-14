@@ -432,6 +432,17 @@ describe("buildEditHeader", () => {
     expect(header).toContain("3");
     expect(header).toContain("10");
   });
+
+  it("does not include enter:save", () => {
+    const header = buildEditHeader(3, 10);
+    expect(header).not.toContain("enter:save");
+  });
+
+  it("shows esc:return instead of esc:cancel", () => {
+    const header = buildEditHeader(3, 10);
+    expect(header).toContain("esc:return");
+    expect(header).not.toContain("esc:cancel");
+  });
 });
 
 // ── createFinishEdit ─────────────────────────────────────────────────
