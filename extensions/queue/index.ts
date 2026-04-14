@@ -200,6 +200,16 @@ function wordWrap(text: string, maxWidth: number): string[] {
   return lines;
 }
 
+// ── Gutter width ─────────────────────────────────────────────────────
+
+/**
+ * Compute the gutter width for a prompt number.
+ * The gutter is: prefix (2: "▸ " or "  ") + number + "." + space.
+ */
+export function computeGutterWidth(promptNumber: number): number {
+  return 2 + `${promptNumber}`.length + 1 + 1; // prefix + digits + "." + " "
+}
+
 // ── Edit header ──────────────────────────────────────────────────────
 
 export function buildEditHeader(current: number, total: number): string {
@@ -586,7 +596,8 @@ function createListView(
   let finishEdit: (text?: string) => void = () => {};
 
   const openEditor = (initialText: string) => {
-    editor = new Editor(tui, editorTheme, { paddingX: 0 });
+    const padding = computeGutterWidth(state.editingIndex + 1);
+    editor = new Editor(tui, editorTheme, { paddingX: padding });
     editor.focused = true;
     editor.setText(initialText);
     finishEdit = createFinishEdit(state, () => editor?.getText() ?? "");
@@ -625,15 +636,7 @@ function createListView(
         const dimBefore = before.map((l: string) => theme.fg("dim", l));
         const dimAfter = after.map((l: string) => theme.fg("dim", l));
         const editorLines = editor.render(w);
-        const editPrefix = `▸ ${state.editingIndex + 1}. `;
-        const editLabel = [theme.fg("accent", editPrefix)];
-        return [
-          ...headerLines,
-          ...dimBefore,
-          ...editLabel,
-          ...editorLines,
-          ...dimAfter,
-        ];
+        return [...headerLines, ...dimBefore, ...editorLines, ...dimAfter];
       }
       renderList();
       const listLines = text.render(w);

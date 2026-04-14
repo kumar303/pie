@@ -9,6 +9,7 @@ import {
   createFinishEdit,
   buildEditHeader,
   buildEditContextLines,
+  computeGutterWidth,
   validateKeyName,
   startQueue,
   type StartQueueDeps,
@@ -401,6 +402,25 @@ describe("formatPromptLines", () => {
     const lines = formatPromptLines("  ", "1.", text, 80, 5);
     expect(lines.length).toBe(6); // 5 content + 1 hint
     expect(lines[5]).toMatch(/1 more line(?!s)/);
+  });
+});
+
+// ── computeGutterWidth ───────────────────────────────────────────────
+
+describe("computeGutterWidth", () => {
+  it("returns width for single-digit prompt number", () => {
+    // "▸ 1. " = 5 chars
+    expect(computeGutterWidth(1)).toBe(5);
+  });
+
+  it("returns width for double-digit prompt number", () => {
+    // "▸ 10. " = 6 chars
+    expect(computeGutterWidth(10)).toBe(6);
+  });
+
+  it("returns width for triple-digit prompt number", () => {
+    // "▸ 100. " = 7 chars
+    expect(computeGutterWidth(100)).toBe(7);
   });
 });
 
