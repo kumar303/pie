@@ -127,6 +127,7 @@ export function formatPromptLines(
   num: string,
   text: string,
   width: number,
+  maxLines: number = 5,
 ): string[] {
   const gutter = `${prefix}${num} `;
   const indent = " ".repeat(gutter.length);
@@ -146,6 +147,14 @@ export function formatPromptLines(
         result.push(indent + line);
       }
     }
+  }
+
+  if (result.length > maxLines) {
+    const remaining = result.length - maxLines;
+    const suffix = remaining === 1 ? "1 more line" : `${remaining} more lines`;
+    const truncated = result.slice(0, maxLines);
+    truncated.push(`${indent}[${suffix}]`);
+    return truncated;
   }
 
   return result;
@@ -194,7 +203,7 @@ function wordWrap(text: string, maxWidth: number): string[] {
 // ── Edit header ──────────────────────────────────────────────────────
 
 export function buildEditHeader(current: number, total: number): string {
-  return `Editing prompt ${current} of ${total} — enter:save  ^C:clear  esc:cancel`;
+  return `Editing prompt ${current} of ${total} — enter:save  shift+enter:newline  ^C:clear  esc:cancel`;
 }
 
 // ── Edit context lines ─────────────────────────────────────────────

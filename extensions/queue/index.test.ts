@@ -365,6 +365,43 @@ describe("formatPromptLines", () => {
     const lines = formatPromptLines("  ", "1.", "", 80);
     expect(lines).toEqual(["  1. "]);
   });
+
+  it("truncates prompts longer than maxLines", () => {
+    const text = "line1\nline2\nline3\nline4\nline5\nline6\nline7";
+    const lines = formatPromptLines("  ", "1.", text, 80, 3);
+    expect(lines.length).toBe(4); // 3 content + 1 truncation hint
+    expect(lines[0]).toMatch(/line1/);
+    expect(lines[2]).toMatch(/line3/);
+    expect(lines[3]).toMatch(/4 more lines/);
+  });
+
+  it("does not truncate when lines fit within maxLines", () => {
+    const text = "line1\nline2\nline3";
+    const lines = formatPromptLines("  ", "1.", text, 80, 5);
+    expect(lines.length).toBe(3);
+    expect(lines.every((l) => !l.includes("more lines"))).toBe(true);
+  });
+
+  it("does not truncate when lines equal maxLines", () => {
+    const text = "line1\nline2\nline3\nline4\nline5";
+    const lines = formatPromptLines("  ", "1.", text, 80, 5);
+    expect(lines.length).toBe(5);
+    expect(lines.every((l) => !l.includes("more lines"))).toBe(true);
+  });
+
+  it("uses default maxLines of 5", () => {
+    const text = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8";
+    const lines = formatPromptLines("  ", "1.", text, 80);
+    expect(lines.length).toBe(6); // 5 content + 1 truncation hint
+    expect(lines[5]).toMatch(/3 more lines/);
+  });
+
+  it("says '1 more line' for singular", () => {
+    const text = "l1\nl2\nl3\nl4\nl5\nl6";
+    const lines = formatPromptLines("  ", "1.", text, 80, 5);
+    expect(lines.length).toBe(6); // 5 content + 1 hint
+    expect(lines[5]).toMatch(/1 more line(?!s)/);
+  });
 });
 
 // ── buildEditHeader ──────────────────────────────────────────────────
