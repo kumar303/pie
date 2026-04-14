@@ -421,6 +421,7 @@ import {
   remapFileIndex,
   buildChunkIndex,
   remapChunkIndex,
+  initialDiffScrollOffset,
 } from "./index.ts";
 
 function getUntrackedFiles(): string[] {
@@ -776,6 +777,39 @@ describe("remapChunkIndex", () => {
     // Preamble occupies lines 0-2, app.ts starts at filtered line 3
     // Original line 5 is offset 2 within app.ts -> filtered line 5
     expect(result).toEqual([5]);
+  });
+});
+
+describe("initialDiffScrollOffset", () => {
+  it("returns 0 when the file index is empty", () => {
+    expect(initialDiffScrollOffset([])).toBe(0);
+  });
+
+  it("returns 0 when first file starts at line 0", () => {
+    const fileIndex = [
+      { line: 0, name: "a.ts" },
+      { line: 10, name: "b.ts" },
+    ];
+    expect(initialDiffScrollOffset(fileIndex)).toBe(0);
+  });
+
+  it("returns the first file line when there is a preamble (delta output)", () => {
+    // Delta adds preamble lines before the first file header
+    const fileIndex = [
+      { line: 3, name: "a.ts" },
+      { line: 15, name: "b.ts" },
+    ];
+    expect(initialDiffScrollOffset(fileIndex)).toBe(3);
+  });
+
+  it("is used by 'g' (go to top) so it lands on the first file, not the preamble", () => {
+    // Simulates scrolling to top: should land on first file, not line 0
+    const fileIndex = [
+      { line: 5, name: "a.ts" },
+      { line: 20, name: "b.ts" },
+    ];
+    // "g" should set diffScrollOffset to initialDiffScrollOffset
+    expect(initialDiffScrollOffset(fileIndex)).toBe(5);
   });
 });
 

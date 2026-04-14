@@ -1244,7 +1244,6 @@ export class GitComponent implements Component {
     }
 
     this.diffLines = diffOutput.split("\n");
-    this.diffScrollOffset = 0;
     this.diffFocusPane = "diff";
     this.promptEditor.setText("");
     this.promptEditor.focused = false;
@@ -1269,6 +1268,7 @@ export class GitComponent implements Component {
     this.diffChunkIndex = chunkIndex ?? [];
 
     this.recomputeActiveDiff();
+    this.diffScrollOffset = initialDiffScrollOffset(this.activeDiffFileIndex);
     this.phase = "diff-viewer";
     this.invalidate();
     this.tui.requestRender();
@@ -1569,9 +1569,9 @@ export class GitComponent implements Component {
       this.tui.requestRender();
       return;
     }
-    // g = go to top
+    // g = go to top (first file)
     if (matchesKey(data, "g")) {
-      this.diffScrollOffset = 0;
+      this.diffScrollOffset = initialDiffScrollOffset(this.activeDiffFileIndex);
       this.invalidate();
       this.tui.requestRender();
       return;
@@ -1655,7 +1655,7 @@ export class GitComponent implements Component {
     if (matchesKey(data, "t")) {
       this.hideTests = !this.hideTests;
       this.recomputeActiveDiff();
-      this.diffScrollOffset = 0;
+      this.diffScrollOffset = initialDiffScrollOffset(this.activeDiffFileIndex);
       this.invalidate();
       this.tui.requestRender();
       return;
@@ -2492,6 +2492,19 @@ export function remapChunkIndex(
     }
   }
   return result;
+}
+
+/**
+ * Compute the initial scroll offset for the diff viewer so that it starts
+ * at the first file header.  When delta adds preamble lines before the
+ * first file, this ensures the file is selected from the start (so `e`
+ * works and `f` advances to the *second* file).
+ */
+export function initialDiffScrollOffset(
+  fileIndex: { line: number; name: string }[],
+): number {
+  if (fileIndex.length === 0) return 0;
+  return fileIndex[0].line;
 }
 
 /**
