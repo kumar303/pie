@@ -624,7 +624,7 @@ describe("QueueRunner", () => {
     const startPromise = runner.start(["A", "B", "C"]);
     expect(ctx.setStatus).toHaveBeenCalledTimes(1);
     expect(statusBeforeIdle[0]).toBe(
-      "Queue: scheduled (3 prompts) — /queue :abort to cancel",
+      "/queue: scheduled (3 prompts) — /queue :abort to cancel",
     );
     resolveIdle!();
     await startPromise;
@@ -657,7 +657,7 @@ describe("QueueRunner", () => {
     const ctx = makeCtx();
     const runner = new QueueRunner(ctx);
     await runner.start(["A", "B"]);
-    expect(ctx.setStatus).toHaveBeenCalledWith("Queue: 1/2 prompts");
+    expect(ctx.setStatus).toHaveBeenCalledWith("/queue: 1/2 prompts");
   });
 
   it("updates status on each onAgentEnd", async () => {
@@ -665,9 +665,9 @@ describe("QueueRunner", () => {
     const runner = new QueueRunner(ctx);
     await runner.start(["A", "B", "C"]);
     await runner.onAgentEnd();
-    expect(ctx.setStatus).toHaveBeenCalledWith("Queue: 2/3 prompts");
+    expect(ctx.setStatus).toHaveBeenCalledWith("/queue: 2/3 prompts");
     await runner.onAgentEnd();
-    expect(ctx.setStatus).toHaveBeenCalledWith("Queue: 3/3 prompts");
+    expect(ctx.setStatus).toHaveBeenCalledWith("/queue: 3/3 prompts");
   });
 
   it("clears status after all prompts complete", async () => {
@@ -735,7 +735,7 @@ describe("QueueRunner", () => {
     const runner = new QueueRunner(ctx);
     const startPromise = runner.start(["A", "B"]);
     expect(ctx.setStatus).toHaveBeenCalledWith(
-      "Queue: scheduled (2 prompts) — /queue :abort to cancel",
+      "/queue: scheduled (2 prompts) — /queue :abort to cancel",
     );
     runner.abort();
     expect(ctx.setStatus).toHaveBeenLastCalledWith(undefined);

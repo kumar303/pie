@@ -216,7 +216,7 @@ export function computeGutterWidth(promptNumber: number): number {
 // ── Edit header ──────────────────────────────────────────────────────
 
 export function buildEditHeader(current: number, total: number): string {
-  return `Editing prompt ${current} of ${total} — shift+enter:newline  ^C:clear  esc:return`;
+  return `/queue: editing prompt ${current} of ${total} — shift+enter:newline  ^C:clear  esc:return`;
 }
 
 // ── Edit context lines ─────────────────────────────────────────────
@@ -354,7 +354,7 @@ export class QueueRunner {
     this.nextIndex = 0;
     this.active = true;
     this.ctx.setStatus(
-      `Queue: scheduled (${prompts.length} prompts) \u2014 /queue :abort to cancel`,
+      `/queue: scheduled (${prompts.length} prompts) \u2014 /queue :abort to cancel`,
     );
     await this.sendNext();
   }
@@ -385,7 +385,7 @@ export class QueueRunner {
     const i = this.nextIndex;
     this.ctx.sendUserMessage(this.prompts[i]);
     this.nextIndex++;
-    this.ctx.setStatus(`Queue: ${i + 1}/${this.prompts.length} prompts`);
+    this.ctx.setStatus(`/queue: ${i + 1}/${this.prompts.length} prompts`);
   }
 }
 
@@ -414,7 +414,10 @@ export async function startQueue(
 
   const runner = new QueueRunner(deps.runnerCtx);
   await runner.start(addCriteriaHeaders(prompts));
-  deps.notify(`Queue started with ${prompts.length} prompts`, "info");
+  deps.notify(
+    `/queue started with ${prompts.length} prompts — /queue :abort to cancel`,
+    "info",
+  );
   return { runner };
 }
 
@@ -479,7 +482,7 @@ export default function (pi: ExtensionAPI) {
       if (parsed.kind === "abort") {
         if (runner?.isRunning()) {
           runner.abort();
-          ctx.ui.notify("Queue aborted", "info");
+          ctx.ui.notify("/queue aborted", "info");
         } else {
           ctx.ui.notify("No queue in progress", "info");
         }
@@ -562,7 +565,7 @@ function createListView(
 
   const renderList = () => {
     const lines: string[] = [];
-    const header = `Queue: ${currentKey} (${state.prompts.length}) — enter:submit  e:edit  ↑/↓:nav  d:delete  a:add  t:transpose  S:save  c:copy  esc:cancel`;
+    const header = `/queue: ${currentKey} (${state.prompts.length}) — enter:submit  e:edit  ↑/↓:nav  d:delete  a:add  t:transpose  S:save  c:copy  esc:cancel`;
     lines.push(theme.bold(theme.fg("accent", header)));
     if (flashMessage) {
       lines.push(theme.fg("success", `  ${flashMessage}`));
