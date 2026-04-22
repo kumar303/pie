@@ -1,6 +1,6 @@
 # vs-code-but-chill
 
-**VS Code, but chill: stop language servers from eating too much memory.**
+Stop language servers from eating too much memory.
 
 A pi extension that runs a tiny background server to watch VS Code's
 `tsserver.js` and `eslintServer.js` processes and restart oversized
@@ -45,13 +45,6 @@ to identify what else is leaking.
 | `/vs-code-but-chill logs` | Open the log viewer (follow mode) |
 | `/vs-code-but-chill stop` | Stop the background server        |
 
-## Log viewer keys
-
-- `↑` / `↓` — scroll one line (pauses follow mode on `↑`)
-- `g` — jump to top (pauses follow)
-- `G` — jump to bottom (resumes follow)
-- `q` / Esc — close
-
 ## Configuration (env vars)
 
 | Var                 | Default   | Meaning                                |
@@ -64,12 +57,7 @@ to identify what else is leaking.
 
 ## Files
 
-Everything lives under `~/.cache/vs-code-but-chill_pi/`:
-
-- `server.pid` — server PID
-- `server.sock` — Unix domain socket
-- `server.log` — rolling log (rotated at 5 MB)
-- `clients.json` — pi client refcount
+Logs and other ephemeral files are written to `~/.cache/vs-code-but-chill_pi/`.
 
 ## Platform
 
