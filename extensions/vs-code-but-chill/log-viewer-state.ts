@@ -85,6 +85,35 @@ export function onScrollDown(
   return { ...state, offset: nextOffset };
 }
 
+/** `u`: pause and scroll up one page (body height). */
+export function onPageUp(
+  state: LogViewerState,
+  bodyHeight: number,
+): LogViewerState {
+  return {
+    ...state,
+    followMode: false,
+    offset: Math.max(0, state.offset - bodyHeight),
+  };
+}
+
+/**
+ * `d`: scroll down one page (body height). Snaps back to follow mode
+ * and clears pending if the page lands at or past the bottom.
+ */
+export function onPageDown(
+  state: LogViewerState,
+  bufferLength: number,
+  bodyHeight: number,
+): LogViewerState {
+  const max = Math.max(0, bufferLength - bodyHeight);
+  const nextOffset = state.offset + bodyHeight;
+  if (nextOffset >= max) {
+    return { ...state, followMode: true, offset: max, pendingCount: 0 };
+  }
+  return { ...state, offset: nextOffset };
+}
+
 /** `g`: pause and jump to the top. */
 export function onJumpTop(state: LogViewerState): LogViewerState {
   return { ...state, followMode: false, offset: 0 };

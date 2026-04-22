@@ -25,11 +25,14 @@ interface MockContext {
   ui: {
     notify: (m: string, t?: "info" | "warning" | "error") => void;
     custom: <T>(factory: any) => Promise<T>;
+    setStatus: (key: string, text: string | undefined) => void;
   };
   hasUI: boolean;
   cwd: string;
   notifications: Notification[];
   customFactories: any[];
+  /** Most recent status text per key (undefined after clear). */
+  statuses: Map<string, string | undefined>;
 }
 
 function createMockPi(opts?: { dataDir?: string }) {
@@ -49,12 +52,17 @@ function createMockPi(opts?: { dataDir?: string }) {
     resolve: () => void;
   }> = [];
 
+  const statuses = new Map<string, string | undefined>();
   const ctx: MockContext = {
     notifications,
     customFactories,
+    statuses,
     hasUI: true,
     cwd: opts?.dataDir ?? "/tmp",
     ui: {
+      setStatus: (key: string, text: string | undefined) => {
+        statuses.set(key, text);
+      },
       notify: (message, type = "info") => {
         notifications.push({ message, type });
         for (let i = notifyWatchers.length - 1; i >= 0; i--) {
@@ -125,6 +133,11 @@ function createMockPi(opts?: { dataDir?: string }) {
       const cmd = commands.get(name);
       if (!cmd) throw new Error(`command ${name} not registered`);
       return cmd.handler(args, ctx);
+    },
+    getCompletions: (name: string, prefix: string) => {
+      const cmd = commands.get(name);
+      if (!cmd) throw new Error(`command ${name} not registered`);
+      return cmd.getArgumentCompletions?.(prefix) ?? null;
     },
     handlers,
   };
@@ -240,11 +253,14 @@ describe("vs-code-but-chill extension", () => {
 
     const helloPid = await awaitable.hello;
     expect(helloPid).toBe(process.pid);
-    expect(
-      pi.ctx.notifications.some((n) =>
-        /monitoring TS servers/i.test(n.message),
-      ),
-    ).toBe(true);
+    // On first start we want a single notification that both confirms
+    // the monitor is running and points the user at the help subcommand.
+    const startup = pi.ctx.notifications.find((n) =>
+      /monitor/i.test(n.message),
+    );
+    expect(startup).toBeDefined();
+    expect(startup!.message).toMatch(/running|monitoring/i);
+    expect(startup!.message).toMatch(/\/vs-code-but-chill help/);
   });
 
   it("shows killed-event notifications with workspacePath when available", async () => {
@@ -338,5 +354,245 @@ describe("vs-code-but-chill extension", () => {
 
     await pi.fire("session_shutdown", { type: "session_shutdown" });
     expect(await awaitable.bye).toBe(process.pid);
+  });
+
+  it("/vs-code-but-chill start is a no-op when already connected", async () => {
+    const expectedDir = join(dataDir, ".cache", "vs-code-but-chill_pi");
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(expectedDir, { recursive: true });
+    const awaitable = makeAwaitableServer(expectedDir);
+    server = awaitable.server;
+    await server.start();
+
+    const pi = await loadExtension();
+    await pi.fire("session_start", { type: "session_start" });
+    await awaitable.hello;
+    const statusBefore = pi.ctx.statuses.get("vs-code-but-chill");
+    expect(statusBefore).toBeDefined();
+    const notifCountBefore = pi.ctx.notifications.length;
+
+    await pi.runCommand("vs-code-but-chill", "start");
+
+    // No-op: status unchanged, no "could not connect" error, no spurious
+    // second "monitor running" notification.
+    expect(pi.ctx.statuses.get("vs-code-but-chill")).toBe(statusBefore);
+    const newNotifs = pi.ctx.notifications.slice(notifCountBefore);
+    expect(newNotifs.filter((n) => n.type === "error")).toHaveLength(0);
+    expect(
+      newNotifs.filter((n) => /monitor running/i.test(n.message)),
+    ).toHaveLength(0);
+  });
+
+  it("/vs-code-but-chill start reconnects after a prior stop", async () => {
+    const expectedDir = join(dataDir, ".cache", "vs-code-but-chill_pi");
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(expectedDir, { recursive: true });
+    const awaitable = makeAwaitableServer(expectedDir);
+    server = awaitable.server;
+    await server.start();
+
+    const pi = await loadExtension();
+    await pi.fire("session_start", { type: "session_start" });
+    await awaitable.hello;
+
+    // Stop the server via the command.
+    const stopP = pi.runCommand("vs-code-but-chill", "stop");
+    await awaitable.stop;
+    await server.stop();
+    server = null;
+    await stopP;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(pi.ctx.statuses.get("vs-code-but-chill")).toBeUndefined();
+
+    // Bring up a fresh fake server for the reconnect.
+    const a2 = makeAwaitableServer(expectedDir);
+    server = a2.server;
+    await server.start();
+    const notifCountBefore = pi.ctx.notifications.length;
+
+    await pi.runCommand("vs-code-but-chill", "start");
+    await a2.hello;
+
+    // Status is restored, and no "connection lost" warning snuck in.
+    expect(pi.ctx.statuses.get("vs-code-but-chill")).toBeDefined();
+    const newNotifs = pi.ctx.notifications.slice(notifCountBefore);
+    expect(
+      newNotifs.filter(
+        (n) =>
+          n.type === "warning" &&
+          /connection lost|socket closed/i.test(n.message),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("/vs-code-but-chill stop tears down cleanly (no warning, status cleared)", async () => {
+    // Running `/vs-code-but-chill stop` is a user-initiated shutdown.
+    // The server will ack and close its socket, which trips the
+    // IpcClient's onError. That must not produce a warning, and the
+    // status-bar indicator must go away.
+    const expectedDir = join(dataDir, ".cache", "vs-code-but-chill_pi");
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(expectedDir, { recursive: true });
+    const awaitable = makeAwaitableServer(expectedDir);
+    server = awaitable.server;
+    await server.start();
+
+    const pi = await loadExtension();
+    await pi.fire("session_start", { type: "session_start" });
+    await awaitable.hello;
+    expect(pi.ctx.statuses.get("vs-code-but-chill")).toBeDefined();
+
+    const stopP = pi.runCommand("vs-code-but-chill", "stop");
+    // Simulate the server shutting down in response.
+    await awaitable.stop;
+    await server.stop();
+    server = null;
+    await stopP;
+    // Drain the event loop so any close-event handlers have run.
+    await new Promise((r) => setTimeout(r, 50));
+
+    const lostWarnings = pi.ctx.notifications.filter(
+      (n) =>
+        n.type === "warning" &&
+        /connection lost|socket closed/i.test(n.message),
+    );
+    expect(lostWarnings).toHaveLength(0);
+    expect(pi.ctx.statuses.get("vs-code-but-chill")).toBeUndefined();
+  });
+
+  it("suppresses the connection-lost warning during shutdown", async () => {
+    // Reproduces the real shutdown sequence: the client sends `bye`
+    // (or the extension just disconnects), the server tears down the
+    // socket, and IpcClient's close-handler fires onError("socket
+    // closed"). That's expected — we initiated it — so the user
+    // shouldn't see a scary "server connection lost" warning.
+    const expectedDir = join(dataDir, ".cache", "vs-code-but-chill_pi");
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(expectedDir, { recursive: true });
+    const awaitable = makeAwaitableServer(expectedDir);
+    server = awaitable.server;
+    await server.start();
+
+    const pi = await loadExtension();
+    await pi.fire("session_start", { type: "session_start" });
+    await awaitable.hello;
+
+    // Baseline: no connection-lost warnings yet.
+    expect(
+      pi.ctx.notifications.filter((n) =>
+        /connection lost|socket closed/i.test(n.message),
+      ),
+    ).toHaveLength(0);
+
+    // Fire shutdown and simultaneously tear down the server so the
+    // client's socket close-handler will trip.
+    const shutdownP = pi.fire("session_shutdown", {
+      type: "session_shutdown",
+    });
+    await server.stop();
+    server = null;
+    await shutdownP;
+    // Let the event loop drain any pending close events.
+    await new Promise((r) => setTimeout(r, 50));
+
+    const lostWarnings = pi.ctx.notifications.filter(
+      (n) =>
+        n.type === "warning" &&
+        /connection lost|socket closed/i.test(n.message),
+    );
+    expect(lostWarnings).toHaveLength(0);
+  });
+
+  it("shows a status indicator while connected and clears it on shutdown", async () => {
+    // Behavioral: the extension must surface its active state in the
+    // status bar while connected, and must not leave stale status
+    // behind after shutdown. We don't assert on the literal text
+    // (that's configuration) — only the presence/absence transition.
+    const expectedDir = join(dataDir, ".cache", "vs-code-but-chill_pi");
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(expectedDir, { recursive: true });
+    const awaitable = makeAwaitableServer(expectedDir);
+    server = awaitable.server;
+    await server.start();
+
+    const pi = await loadExtension();
+    const statusKey = "vs-code-but-chill";
+
+    // Before session_start: no status set.
+    expect(pi.ctx.statuses.has(statusKey)).toBe(false);
+
+    await pi.fire("session_start", { type: "session_start" });
+    await awaitable.hello;
+
+    // While connected: status is set to some non-empty text.
+    const active = pi.ctx.statuses.get(statusKey);
+    expect(typeof active).toBe("string");
+    expect((active ?? "").length).toBeGreaterThan(0);
+
+    await pi.fire("session_shutdown", { type: "session_shutdown" });
+
+    // After shutdown: status must be cleared (undefined), not stale text.
+    expect(pi.ctx.statuses.get(statusKey)).toBeUndefined();
+  });
+
+  it("writes a local 'monitor started' line to the log buffer on session_start", async () => {
+    const expectedDir = join(dataDir, ".cache", "vs-code-but-chill_pi");
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(expectedDir, { recursive: true });
+    const awaitable = makeAwaitableServer(expectedDir);
+    server = awaitable.server;
+    await server.start();
+
+    const pi = await loadExtension();
+    await pi.fire("session_start", { type: "session_start" });
+    await awaitable.hello;
+
+    // Open the log viewer and render once — if the client is logging
+    // its own lifecycle, we should see a "monitor started" entry even
+    // before any server broadcast has been processed.
+    const opened = pi.nextCustom();
+    void pi.runCommand("vs-code-but-chill", "logs");
+    await opened;
+    const component = (pi.ctx as any).lastComponent as {
+      render: (w: number) => string[];
+    };
+    const rendered = component.render(120).join("\n");
+    expect(rendered).toMatch(/monitor started|monitor connected/i);
+  });
+
+  describe("argument completion", () => {
+    it("suggests all subcommands when prefix is empty", async () => {
+      const pi = await loadExtension();
+      const items = pi.getCompletions("vs-code-but-chill", "");
+      expect(items).not.toBeNull();
+      const values = items!.map((i) => i.value).sort();
+      expect(values).toEqual(["help", "logs", "start", "stop"]);
+      // Each item should have a description so it shows up usefully.
+      for (const item of items!) {
+        expect(item.description).toBeTruthy();
+      }
+    });
+
+    it("filters by prefix case-insensitively", async () => {
+      const pi = await loadExtension();
+      expect(
+        pi.getCompletions("vs-code-but-chill", "l")!.map((i) => i.value),
+      ).toEqual(["logs"]);
+      expect(
+        pi.getCompletions("vs-code-but-chill", "L")!.map((i) => i.value),
+      ).toEqual(["logs"]);
+      expect(
+        pi.getCompletions("vs-code-but-chill", "s")!.map((i) => i.value),
+      ).toEqual(["start", "stop"]);
+      expect(
+        pi.getCompletions("vs-code-but-chill", "sta")!.map((i) => i.value),
+      ).toEqual(["start"]);
+    });
+
+    it("returns an empty list when no subcommand matches", async () => {
+      const pi = await loadExtension();
+      const items = pi.getCompletions("vs-code-but-chill", "zzz");
+      expect(items).toEqual([]);
+    });
   });
 });

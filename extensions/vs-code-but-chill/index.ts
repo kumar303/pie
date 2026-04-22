@@ -23,12 +23,32 @@ import {
   onNewLine,
   onScrollUp,
   onScrollDown,
+  onPageUp,
+  onPageDown,
   onJumpTop,
   onJumpBottom,
 } from "./log-viewer-state.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER_MAIN = join(HERE, "server", "main.ts");
+
+const STATUS_KEY = "vs-code-but-chill";
+const STATUS_TEXT = "🍦✨ /vs-code-but-chill";
+
+const SUBCOMMANDS: Array<{
+  value: string;
+  label: string;
+  description: string;
+}> = [
+  { value: "help", label: "help", description: "Show help" },
+  { value: "logs", label: "logs", description: "Open the log viewer" },
+  {
+    value: "start",
+    label: "start",
+    description: "Start the background server (no-op if running)",
+  },
+  { value: "stop", label: "stop", description: "Stop the background server" },
+];
 
 export default function (pi: ExtensionAPI) {
   const dataDir = defaultDataDir();
@@ -58,19 +78,33 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  async function connect(): Promise<void> {
+  /** Timestamped local log entry (used for client-side lifecycle events). */
+  function pushClientLog(msg: string): void {
+    pushLog(`[${new Date().toISOString()}] ${msg}`);
+  }
+
+  async function connect(): Promise<boolean> {
+    pushClientLog(
+      "client: starting vs-code-but-chill monitor (connecting to server...)",
+    );
     try {
-      const { client: c } = await ensureServer({
+      const { client: c, respawned } = await ensureServer({
         dataDir,
         spawnServer: (dir) => spawnServer(SERVER_MAIN, dir),
       });
       client = c;
 
       c.onError((err) => {
+        if (shuttingDown) {
+          // Expected: we're tearing down, the socket close is ours.
+          pushClientLog(`client: socket closed during shutdown`);
+          return;
+        }
         notify?.(
           `vs-code-but-chill: server connection lost: ${err.message}`,
           "warning",
         );
+        pushClientLog(`client: server connection lost: ${err.message}`);
       });
 
       onTypedMessage(c, {
@@ -98,39 +132,85 @@ export default function (pi: ExtensionAPI) {
       c.send({ type: "events" });
       // Prime with recent log lines
       c.send({ type: "logs", tail: 500 });
+      pushClientLog(
+        respawned
+          ? `client: monitor started (spawned new server, pid=${process.pid} as client)`
+          : `client: monitor connected (attached to existing server, pid=${process.pid} as client)`,
+      );
+      return true;
     } catch (err) {
+      pushClientLog(`client: could not connect to server: ${errMessage(err)}`);
       notify?.(
         `vs-code-but-chill: could not start server: ${errMessage(err)}`,
         "error",
       );
+      return false;
     }
   }
 
+  /** Handle to clear the status-bar indicator on shutdown. */
+  let clearStatus: (() => void) | null = null;
+  /**
+   * Set once we've initiated our own shutdown, so the connection-lost
+   * handler can stay quiet about the socket closing — we closed it.
+   */
+  let shuttingDown = false;
+
   pi.on("session_start", async (_event, ctx) => {
     notify = (m, t) => ctx.ui.notify(m, t);
-    await connect();
-    ctx.ui.notify("/vs-code-but-chill: monitoring TS servers", "info");
+    const ok = await connect();
+    if (ok) {
+      ctx.ui.notify(
+        "vs-code-but-chill: monitor running · try /vs-code-but-chill help",
+        "info",
+      );
+      ctx.ui.setStatus(STATUS_KEY, STATUS_TEXT);
+      clearStatus = () => ctx.ui.setStatus(STATUS_KEY, undefined);
+    }
   });
 
-  pi.on("session_shutdown", async () => {
+  /**
+   * Drop the status-bar indicator and disconnect from the server.
+   * Safe to call multiple times. `sendBye` controls whether we notify
+   * the server we're leaving (true on session end; false on an
+   * explicit `stop` where we've already asked the server to exit).
+   */
+  async function teardown(opts: { sendBye: boolean }): Promise<void> {
+    shuttingDown = true;
+    if (clearStatus) {
+      clearStatus();
+      clearStatus = null;
+    }
     if (client) {
-      try {
-        client.send({ type: "bye", pid: process.pid });
-      } catch (err) {
-        // IpcClient.send guards against a missing or destroyed socket,
-        // but a write that races with remote close can still surface
-        // EPIPE. Surface it so we don't lose the signal.
-        reportConsole("sending bye during shutdown failed", err);
+      if (opts.sendBye) {
+        try {
+          client.send({ type: "bye", pid: process.pid });
+        } catch (err) {
+          // IpcClient.send guards against a missing or destroyed
+          // socket, but a write that races with remote close can still
+          // surface EPIPE. Surface it so we don't lose the signal.
+          reportConsole("sending bye during shutdown failed", err);
+        }
       }
-      // Give the message a tick to flush before closing.
+      // Give any outgoing message a tick to flush before closing.
       await sleep(50);
       client.disconnect();
       client = null;
     }
+  }
+
+  pi.on("session_shutdown", async () => {
+    await teardown({ sendBye: true });
   });
 
   pi.registerCommand("vs-code-but-chill", {
     description: "Monitor TS servers and stop them from eating too much memory",
+    getArgumentCompletions: (prefix: string) => {
+      const needle = prefix.trim().toLowerCase();
+      return SUBCOMMANDS.filter((s) =>
+        s.value.toLowerCase().startsWith(needle),
+      );
+    },
     handler: async (args, ctx) => {
       const sub = args.trim().split(/\s+/)[0] ?? "";
       if (sub === "" || sub === "help") {
@@ -149,6 +229,22 @@ export default function (pi: ExtensionAPI) {
         await showLogs(ctx, recentLog, logListeners);
         return;
       }
+      if (sub === "start") {
+        if (client) {
+          // Already connected — nothing to do.
+          return;
+        }
+        // Previously stopped (or never started this session): run the
+        // normal connect path, which will spawn a fresh server if
+        // needed and restore the status indicator.
+        shuttingDown = false;
+        const ok = await connect();
+        if (ok) {
+          ctx.ui.setStatus(STATUS_KEY, STATUS_TEXT);
+          clearStatus = () => ctx.ui.setStatus(STATUS_KEY, undefined);
+        }
+        return;
+      }
       if (sub === "stop") {
         if (!client) {
           ctx.ui.notify("vs-code-but-chill: server is not running", "warning");
@@ -159,6 +255,11 @@ export default function (pi: ExtensionAPI) {
           "vs-code-but-chill: stop sent; server will shut down",
           "info",
         );
+        // The server acknowledged the stop and will close the socket;
+        // run our own teardown so the status indicator disappears and
+        // we don't emit a spurious "connection lost" warning. No need
+        // to send `bye` — the stop command already asked it to exit.
+        await teardown({ sendBye: false });
         return;
       }
       ctx.ui.notify(
@@ -175,13 +276,14 @@ async function showHelp(ctx: ExtensionCommandContext): Promise<void> {
     "",
     "  /vs-code-but-chill        — show this help",
     "  /vs-code-but-chill help   — show this help",
-    "  /vs-code-but-chill logs   — open the log viewer (follow mode; ↑/↓, g/G, q)",
+    "  /vs-code-but-chill logs   — open the log viewer (follow mode; ↑/↓, d/u, g/G, q)",
+    "  /vs-code-but-chill start  — start the background server (no-op if running)",
     "  /vs-code-but-chill stop   — stop the background server",
     "",
     "Thresholds (override via env):",
     "  VSCBC_FULL_MB      default 2500  — full semantic tsserver",
     "  VSCBC_PARTIAL_MB   default 800   — partialSemantic tsserver",
-    "  VSCBC_TICK_MS      default 20min — scan interval",
+    "  VSCBC_TICK_MS      default 1200000 (20min, in ms) — scan interval",
     "  VSCBC_MIN_ETIME_S  default 300   — skip procs younger than this",
     "",
     "Data dir: ~/.cache/vs-code-but-chill_pi/",
@@ -255,7 +357,10 @@ async function showLogs(
       );
       const hints = theme.fg(
         "dim",
-        truncateToWidth("↑/↓ scroll · g top · G bottom · q/esc close", w),
+        truncateToWidth(
+          "↑/↓ scroll · d/u page · g top · G bottom · q/esc close",
+          w,
+        ),
       );
       text.setText([header, ...visible, status, hints].join("\n"));
     };
@@ -288,6 +393,18 @@ async function showLogs(
         }
         if (matchesKey(data, Key.down)) {
           state = onScrollDown(state, buffer.length, bodyHeight());
+          rebuild();
+          tui.requestRender();
+          return;
+        }
+        if (matchesKey(data, "u")) {
+          state = onPageUp(state, bodyHeight());
+          rebuild();
+          tui.requestRender();
+          return;
+        }
+        if (matchesKey(data, "d")) {
+          state = onPageDown(state, buffer.length, bodyHeight());
           rebuild();
           tui.requestRender();
           return;

@@ -8,6 +8,8 @@ import {
   onScrollDown,
   onJumpTop,
   onJumpBottom,
+  onPageUp,
+  onPageDown,
 } from "./log-viewer-state.ts";
 
 const BODY = 10;
@@ -89,6 +91,38 @@ describe("log-viewer state machine", () => {
     it("snaps to follow and clears pending when the user hits bottom", () => {
       const s = { offset: 19, followMode: false, pendingCount: 5 };
       const next = onScrollDown(s, 30, BODY);
+      expect(next.offset).toBe(20);
+      expect(next.followMode).toBe(true);
+      expect(next.pendingCount).toBe(0);
+    });
+  });
+
+  describe("onPageUp", () => {
+    it("pauses follow and scrolls up by the body height", () => {
+      const s = { offset: 18, followMode: true, pendingCount: 0 };
+      const next = onPageUp(s, BODY);
+      expect(next.offset).toBe(8);
+      expect(next.followMode).toBe(false);
+    });
+    it("clamps to zero when a page up would go past the top", () => {
+      const s = { offset: 3, followMode: false, pendingCount: 0 };
+      expect(onPageUp(s, BODY).offset).toBe(0);
+    });
+  });
+
+  describe("onPageDown", () => {
+    it("scrolls down by the body height without touching follow state when not at bottom", () => {
+      const s = { offset: 2, followMode: false, pendingCount: 4 };
+      const next = onPageDown(s, 100, BODY);
+      expect(next.offset).toBe(12);
+      expect(next.followMode).toBe(false);
+      // Pending is preserved while still paused.
+      expect(next.pendingCount).toBe(4);
+    });
+    it("snaps back to follow mode and clears pending on reaching the bottom", () => {
+      // buffer 30, body 10 → max offset 20. Offset 15 + page → 25 > max.
+      const s = { offset: 15, followMode: false, pendingCount: 7 };
+      const next = onPageDown(s, 30, BODY);
       expect(next.offset).toBe(20);
       expect(next.followMode).toBe(true);
       expect(next.pendingCount).toBe(0);
