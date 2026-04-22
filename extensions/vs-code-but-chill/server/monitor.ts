@@ -1,18 +1,29 @@
 /**
  * Monitor logic for vs-code-but-chill.
  *
- * Pure functions for parsing ps output and classifying tsserver processes,
- * plus a KillDecisionEngine that applies the kill rules described in PLAN.md.
+ * Pure functions for parsing ps output and classifying VS Code
+ * language-server processes (tsserver + eslintServer), plus a
+ * KillDecisionEngine that applies the kill rules described in PLAN.md.
  */
 
 export type TsServerMode = "full" | "partialSemantic";
+export type ProcessKind = "tsserver" | "eslint";
 
+/**
+ * A VS Code language-server process we're monitoring. `kind` picks the
+ * memory threshold and the "killed" event label; `workspaceHash`
+ * identifies the workspace for circuit-breaker + respawn-check
+ * purposes:
+ *   - tsserver: the hash in `--cancellationPipeName tscancellation-<hash>`
+ *   - eslint:   `eslint:<clientProcessId>` (the VS Code window pid)
+ */
 export interface TsServerProcess {
   pid: number;
   ppid: number;
   rssKb: number;
   etimeSeconds: number;
   args: string;
+  kind: ProcessKind;
   mode: TsServerMode;
   workspaceHash: string | null;
 }
@@ -39,7 +50,8 @@ export function parsePsOutput(output: string): TsServerProcess[] {
     const match = line.match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/);
     if (!match) continue;
     const [, pidStr, ppidStr, rssStr, etimeStr, args] = match;
-    if (!args.includes("tsserver.js")) continue;
+    const kind = classifyKind(args);
+    if (!kind) continue;
     if (args.includes("typingsInstaller.js")) continue;
 
     rows.push({
@@ -48,11 +60,41 @@ export function parsePsOutput(output: string): TsServerProcess[] {
       rssKb: Number(rssStr),
       etimeSeconds: parseEtimeSeconds(etimeStr),
       args,
+      kind,
       mode: classifyMode(args),
-      workspaceHash: parseWorkspaceHash(args),
+      workspaceHash:
+        kind === "tsserver"
+          ? parseWorkspaceHash(args)
+          : parseEslintWorkspaceHash(args),
     });
   }
   return rows;
+}
+
+/**
+ * Classify an args string as one of the monitored VS Code
+ * language-server processes, or return null if it's neither.
+ *
+ * The ESLint LSP server's real launch line looks like:
+ *   node .../dbaeumer.vscode-eslint-<ver>/server/out/eslintServer.js
+ *        --node-ipc --clientProcessId=<window-pid>
+ * (Other transports `--stdio`, `--pipe`, `--socket` are also valid.)
+ */
+export function classifyKind(args: string): ProcessKind | null {
+  if (args.includes("eslintServer.js")) return "eslint";
+  if (args.includes("tsserver.js")) return "tsserver";
+  return null;
+}
+
+/**
+ * Workspace identity for ESLint. VS Code's ESLint extension passes
+ * `--clientProcessId=<pid>` (or space-separated) identifying the
+ * editor window that owns this server. Each window is one workspace
+ * from our perspective, so that pid is a stable hash.
+ */
+export function parseEslintWorkspaceHash(args: string): string | null {
+  const m = args.match(/--clientProcessId[=\s]+(\d+)/);
+  return m ? `eslint:${m[1]}` : null;
 }
 
 /**
@@ -139,6 +181,8 @@ export function filterByParentComm(
 export interface KillDecisionEngineOptions {
   fullMb: number;
   partialMb: number;
+  /** Threshold (MB) for ESLint LSP server processes. */
+  eslintMb: number;
   minEtimeSeconds: number;
   /** Returns ms since epoch. Defaults to Date.now. */
   clock?: () => number;
@@ -176,11 +220,19 @@ export class KillDecisionEngine {
     this.opts = {
       fullMb: opts.fullMb,
       partialMb: opts.partialMb,
+      eslintMb: opts.eslintMb,
       minEtimeSeconds: opts.minEtimeSeconds,
       clock: opts.clock ?? (() => Date.now()),
       recentWorkspaceModifiedAt: opts.recentWorkspaceModifiedAt ?? (() => 0),
       recentActivityWindowSec: opts.recentActivityWindowSec ?? 30,
     };
+  }
+
+  #thresholdFor(proc: TsServerProcess): number {
+    if (proc.kind === "eslint") return this.opts.eslintMb;
+    return proc.mode === "partialSemantic"
+      ? this.opts.partialMb
+      : this.opts.fullMb;
   }
 
   shouldKill(proc: TsServerProcess): KillDecision {
@@ -189,8 +241,7 @@ export class KillDecisionEngine {
     // Always update tracking
     this.tracked.set(proc.pid, { lastRssKb: proc.rssKb, lastSeenAt: now });
 
-    const thresholdMb =
-      proc.mode === "partialSemantic" ? this.opts.partialMb : this.opts.fullMb;
+    const thresholdMb = this.#thresholdFor(proc);
     const rssMb = proc.rssKb / 1024;
 
     if (rssMb < thresholdMb) {

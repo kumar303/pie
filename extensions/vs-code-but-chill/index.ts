@@ -76,12 +76,13 @@ export default function (pi: ExtensionAPI) {
       onTypedMessage(c, {
         killed: (msg) => {
           const where = msg.workspacePath ?? msg.workspace ?? "<unknown>";
+          const label = msg.kind === "eslint" ? "eslintServer" : "tsserver";
           notify?.(
-            `/vs-code-but-chill: killed tsserver (${msg.rssMb} MB) in ${where}`,
+            `/vs-code-but-chill: killed ${label} (${msg.rssMb} MB) in ${where}`,
             "info",
           );
           pushLog(
-            `[killed] pid=${msg.pid} mode=${msg.mode} rss=${msg.rssMb}MB workspace=${where}`,
+            `[killed] ${msg.kind} pid=${msg.pid} mode=${msg.mode} rss=${msg.rssMb}MB workspace=${where}`,
           );
         },
         error: (msg) => {

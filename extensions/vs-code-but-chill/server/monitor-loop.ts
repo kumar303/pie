@@ -96,6 +96,7 @@ export async function runMonitorTick(
     opts.emit({
       type: "killed",
       pid: proc.pid,
+      kind: proc.kind,
       workspace: proc.workspaceHash,
       workspacePath,
       rssMb: Math.round(proc.rssKb / 1024),

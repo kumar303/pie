@@ -93,6 +93,7 @@ describe("IpcServer/Client", () => {
           {
             pid: 1,
             rssMb: 100,
+            kind: "tsserver",
             mode: "full",
             workspace: "abc",
             etimeSec: 300,
@@ -158,6 +159,7 @@ describe("IpcServer/Client", () => {
     server.broadcastEvent({
       type: "killed",
       pid: 5,
+      kind: "tsserver",
       workspace: "abc",
       rssMb: 2600,
       mode: "full",

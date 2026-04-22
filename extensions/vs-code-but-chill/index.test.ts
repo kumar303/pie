@@ -264,6 +264,7 @@ describe("vs-code-but-chill extension", () => {
     server.broadcastEvent({
       type: "killed",
       pid: 555,
+      kind: "tsserver",
       workspace: "abc",
       workspacePath: "/Users/me/my-project",
       rssMb: 2714,
@@ -293,6 +294,7 @@ describe("vs-code-but-chill extension", () => {
     server.broadcastEvent({
       type: "killed",
       pid: 42,
+      kind: "tsserver",
       workspace: "deadbeef",
       rssMb: 2600,
       mode: "full",

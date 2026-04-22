@@ -28,6 +28,7 @@ import {
 interface Config {
   fullMb: number;
   partialMb: number;
+  eslintMb: number;
   tickMs: number;
   minEtimeSec: number;
 }
@@ -37,6 +38,7 @@ function readConfig(): Config {
   return {
     fullMb: Number(env.VSCBC_FULL_MB) || 2500,
     partialMb: Number(env.VSCBC_PARTIAL_MB) || 800,
+    eslintMb: Number(env.VSCBC_ESLINT_MB) || 1500,
     tickMs: Number(env.VSCBC_TICK_MS) || 20 * 60 * 1000,
     minEtimeSec: Number(env.VSCBC_MIN_ETIME_S) || 300,
   };
@@ -70,12 +72,13 @@ async function main(dataDir: string): Promise<void> {
 
   const config = readConfig();
   log.write(
-    `config full=${config.fullMb}MB partial=${config.partialMb}MB tick=${config.tickMs}ms minEtime=${config.minEtimeSec}s`,
+    `config full=${config.fullMb}MB partial=${config.partialMb}MB eslint=${config.eslintMb}MB tick=${config.tickMs}ms minEtime=${config.minEtimeSec}s`,
   );
 
   const engine = new KillDecisionEngine({
     fullMb: config.fullMb,
     partialMb: config.partialMb,
+    eslintMb: config.eslintMb,
     minEtimeSeconds: config.minEtimeSec,
     // Recent workspace activity hook — lightweight heuristic only.
     recentWorkspaceModifiedAt: (proc) =>
@@ -169,6 +172,7 @@ async function main(dataDir: string): Promise<void> {
       watching: lastProcesses.map((p) => ({
         pid: p.pid,
         rssMb: Math.round(p.rssKb / 1024),
+        kind: p.kind,
         mode: p.mode,
         workspace: p.workspaceHash,
         etimeSec: p.etimeSeconds,
@@ -227,7 +231,7 @@ async function main(dataDir: string): Promise<void> {
         emit: (ev) => {
           ipc.broadcastEvent(ev);
           log.write(
-            `killed pid=${ev.pid} mode=${ev.mode} rss=${ev.rssMb}MB workspace=${ev.workspacePath ?? ev.workspace ?? "?"} reason=${ev.reason}`,
+            `killed ${ev.kind} pid=${ev.pid} mode=${ev.mode} rss=${ev.rssMb}MB workspace=${ev.workspacePath ?? ev.workspace ?? "?"} reason=${ev.reason}`,
           );
         },
         log: (msg) => log.write(msg),

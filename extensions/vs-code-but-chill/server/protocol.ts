@@ -5,6 +5,7 @@
  */
 
 export type TsServerMode = "full" | "partialSemantic";
+export type ProcessKind = "tsserver" | "eslint";
 
 // ── Client → server requests ────────────────────────────────────────
 
@@ -51,6 +52,7 @@ export interface StatusResponse {
   watching: Array<{
     pid: number;
     rssMb: number;
+    kind: ProcessKind;
     mode: TsServerMode;
     workspace: string | null;
     etimeSec: number;
@@ -69,6 +71,7 @@ export interface PongResponse {
 export interface KilledEvent {
   type: "killed";
   pid: number;
+  kind: ProcessKind;
   workspace: string | null;
   workspacePath?: string;
   rssMb: number;

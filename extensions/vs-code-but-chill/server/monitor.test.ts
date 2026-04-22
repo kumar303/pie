@@ -10,7 +10,66 @@ import {
   KillDecisionEngine,
 } from "./monitor.ts";
 
+describe("parsePsOutput — eslintServer.js", () => {
+  it("parses an eslintServer row and tags it kind=eslint", () => {
+    // Actual VS Code ESLint extension launches look like this on macOS
+    // (observed in /Users/.../dbaeumer.vscode-eslint-*/client/out/extension.js).
+    // The server is forked by the `Code Helper (Plugin)` parent with
+    // `--node-ipc` plus `--clientProcessId=<window-pid>`.
+    const psOut = `
+  PID  PPID    RSS     ELAPSED COMMAND
+54321 11111 1800000      12:30 /usr/local/bin/node --max-old-space-size=4096 /Users/me/.vscode/extensions/dbaeumer.vscode-eslint-3.0.24/server/out/eslintServer.js --node-ipc --clientProcessId=11111
+`.trim();
+    const rows = parsePsOutput(psOut);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      pid: 54321,
+      kind: "eslint",
+      mode: "full",
+      workspaceHash: "eslint:11111",
+    });
+  });
+
+  it("parses tsserver and eslint rows together", () => {
+    const psOut = `
+  PID  PPID    RSS     ELAPSED COMMAND
+12345 11111 3072000      10:15 node /path/tsserver.js --cancellationPipeName /tmp/tscancellation-foo.sock
+54321 11111 1800000      12:30 node /ext/eslintServer.js --node-ipc --clientProcessId=11111
+`.trim();
+    const rows = parsePsOutput(psOut);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.kind).sort()).toEqual(["eslint", "tsserver"]);
+  });
+
+  it("returns workspaceHash null when clientProcessId is missing", () => {
+    const psOut = `
+  PID  PPID    RSS     ELAPSED COMMAND
+54321 11111 1800000   00:00:30 node /ext/eslintServer.js --stdio
+`.trim();
+    const rows = parsePsOutput(psOut);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe("eslint");
+    expect(rows[0].workspaceHash).toBeNull();
+  });
+
+  it("accepts `--clientProcessId 11111` space form", () => {
+    const psOut = `
+  PID  PPID    RSS     ELAPSED COMMAND
+54321 11111 1800000   00:00:30 node /ext/eslintServer.js --node-ipc --clientProcessId 22222
+`.trim();
+    expect(parsePsOutput(psOut)[0].workspaceHash).toBe("eslint:22222");
+  });
+});
+
 describe("parsePsOutput", () => {
+  it("tags tsserver rows with kind=tsserver", () => {
+    const psOut = `
+  PID  PPID    RSS     ELAPSED COMMAND
+12345 11111 3072000      10:15 node /path/tsserver.js --cancellationPipeName /tmp/tscancellation-foo.sock
+`.trim();
+    expect(parsePsOutput(psOut)[0].kind).toBe("tsserver");
+  });
+
   it("parses a single full-semantic tsserver row", () => {
     const psOut = `
   PID  PPID    RSS     ELAPSED COMMAND
@@ -99,6 +158,7 @@ describe("filterByParentComm", () => {
     rssKb: 1024,
     etimeSeconds: 100,
     args: "tsserver.js",
+    kind: "tsserver",
     mode: "full",
     workspaceHash: null,
   });
@@ -143,6 +203,7 @@ describe("KillDecisionEngine", () => {
   const defaults = {
     fullMb: 2500,
     partialMb: 800,
+    eslintMb: 1500,
     minEtimeSeconds: 300,
   };
 
@@ -154,10 +215,59 @@ describe("KillDecisionEngine", () => {
       etimeSeconds: 600,
       args: "node tsserver.js --cancellationPipeName /tmp/tscancellation-abc.sock --locale en",
       mode: "full",
+      kind: "tsserver",
       workspaceHash: "abc",
       ...overrides,
     };
   }
+
+  it("uses the eslint threshold for kind=eslint", () => {
+    const engine = new KillDecisionEngine({
+      ...defaults,
+      clock: () => 1_000_000,
+      recentWorkspaceModifiedAt: () => 0,
+    });
+    // 1600 MB is under the full/partial thresholds but over eslintMb
+    engine.shouldKill(
+      baseProc({
+        kind: "eslint",
+        rssKb: 1600 * 1024,
+        workspaceHash: "eslint:99",
+      }),
+    );
+    const d = engine.shouldKill(
+      baseProc({
+        kind: "eslint",
+        rssKb: 1700 * 1024,
+        workspaceHash: "eslint:99",
+      }),
+    );
+    expect(d.kill).toBe(true);
+  });
+
+  it("does not kill an eslint process below the eslint threshold", () => {
+    const engine = new KillDecisionEngine({
+      ...defaults,
+      clock: () => 1_000_000,
+      recentWorkspaceModifiedAt: () => 0,
+    });
+    engine.shouldKill(
+      baseProc({
+        kind: "eslint",
+        rssKb: 1400 * 1024,
+        workspaceHash: "eslint:99",
+      }),
+    );
+    const d = engine.shouldKill(
+      baseProc({
+        kind: "eslint",
+        rssKb: 1450 * 1024,
+        workspaceHash: "eslint:99",
+      }),
+    );
+    expect(d.kill).toBe(false);
+    expect(d.reason).toMatch(/threshold/i);
+  });
 
   let engine: KillDecisionEngine;
   let now = 0;

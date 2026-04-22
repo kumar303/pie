@@ -19,7 +19,7 @@ All code is licensed under [WTFPL](LICENSE).
 | [no-sleep-while-working](extensions/no-sleep-while-working/) | Prevents your Mac from sleeping while pi is actively working on a task.                                                    |
 | [pie-kumar303-config](extensions/pie-kumar303-config/)       | Extension manager for this repo. Invoke with `/pie-kumar303-config` to selectively install/remove extensions via symlinks. |
 | [queue](extensions/queue/)                                   | Send your agent a list of prompts, one at a time. Invoke with `/queue <key>`.                                              |
-| [vs-code-but-chill](extensions/vs-code-but-chill/)           | Restart TS language servers that eat too much memory. Invoke with `/vs-code-but-chill`.                                    |
+| [vs-code-but-chill](extensions/vs-code-but-chill/)           | Restart language servers when they eat too much memory.                                                                    |
 | [yanked](extensions/yanked/)                                 | Yank (save) the current prompt for later.                                                                                  |
 
 ## Install
