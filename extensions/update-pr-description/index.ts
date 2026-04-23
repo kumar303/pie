@@ -56,6 +56,9 @@ interface MinimalPi {
     config: {
       description: string;
       handler: (args: string, ctx: unknown) => Promise<void> | void;
+      getArgumentCompletions?: (
+        prefix: string,
+      ) => Array<{ value: string; label: string }>;
     },
   ): void;
   registerTool(def: {
@@ -134,21 +137,36 @@ function shellEscape(s: string): string {
 
 // ── Extension factory (testable) ────────────────────────────────────
 
+const SUBCOMMANDS = ["copy"] as const;
+
 export function createExtension(
   pi: MinimalPi,
   deps: UpdatePrDeps = defaultDeps(),
 ): void {
   let session: Session | null = null;
+  // Path of the most recently accepted current.md. Survives session
+  // clearing so `/update-pr-description copy` can re-copy after an accept.
+  let lastAcceptedPath: string | null = null;
 
   pi.registerCommand("update-pr-description", {
     description:
-      "Fetch a GitHub PR description and ask the agent to update it for the latest changes",
-    handler: async (_args, rawCtx) => {
+      "Fetch a GitHub PR description and ask the agent to update it for the latest changes (use `copy` to re-copy the last accepted version)",
+    getArgumentCompletions: (prefix: string) =>
+      SUBCOMMANDS.filter((c) => c.startsWith(prefix)).map((c) => ({
+        value: c,
+        label: c,
+      })),
+    handler: async (args, rawCtx) => {
       const ctx = rawCtx as {
         ui: MockUi;
         cwd?: string;
         hasUI?: boolean;
       };
+
+      if (args.trim() === "copy") {
+        await handleCopy(ctx);
+        return;
+      }
 
       // Discover the PR for the current branch via gh.
       const ghResult = await deps.exec(
@@ -186,6 +204,28 @@ export function createExtension(
     },
   });
 
+  async function handleCopy(ctx: { ui: MockUi }): Promise<void> {
+    const path = session?.currentPath ?? lastAcceptedPath;
+    if (!path) {
+      ctx.ui.notify(
+        "No PR description to copy. Run /update-pr-description first.",
+        "error",
+      );
+      return;
+    }
+    const content = await deps.readFile(path);
+    const pb = await deps.exec("pbcopy", [], { input: content });
+    if (pb.exitCode !== 0) {
+      const msg = pb.stderr.trim() || `pbcopy exited with code ${pb.exitCode}`;
+      ctx.ui.notify(`Failed to copy to clipboard: ${msg}`, "error");
+      return;
+    }
+    ctx.ui.notify(
+      `Copied PR description (${content.length} chars) to the clipboard.`,
+      "info",
+    );
+  }
+
   pi.registerTool({
     name: "update_pr_description",
     label: "Update PR Description",
@@ -222,6 +262,7 @@ export function createExtension(
       if (accepted) {
         await deps.exec("pbcopy", [], { input: params.new_content });
         const clearedSession = session;
+        lastAcceptedPath = clearedSession.currentPath;
         session = null;
         return {
           content: [

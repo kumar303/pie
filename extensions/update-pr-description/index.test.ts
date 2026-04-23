@@ -48,6 +48,9 @@ type RegisteredCommand = {
   config: {
     description: string;
     handler: (args: string, ctx: unknown) => Promise<void> | void;
+    getArgumentCompletions?: (
+      prefix: string,
+    ) => Array<{ value: string; label: string }>;
   };
 };
 
@@ -188,6 +191,21 @@ describe("createExtension registration", () => {
     expect(cmd).toBeDefined();
   });
 
+  it("suggests 'copy' as argument completion", () => {
+    const pi = makeMockPi();
+    createExtension(pi, makeMockDeps());
+    const cmd = pi.commands.find((c) => c.name === "update-pr-description")!;
+    const all = cmd.config.getArgumentCompletions!("").map((i) => i.value);
+    expect(all).toContain("copy");
+    const filtered = cmd.config.getArgumentCompletions!("c").map(
+      (i) => i.value,
+    );
+    expect(filtered).toContain("copy");
+    expect(
+      cmd.config.getArgumentCompletions!("zzz").map((i) => i.value),
+    ).toEqual([]);
+  });
+
   it("registers update_pr_description tool", () => {
     const pi = makeMockPi();
     createExtension(pi, makeMockDeps());
@@ -280,6 +298,42 @@ describe("command handler", () => {
     await runCmd();
     expect(pi.sent).toHaveLength(0);
     expect(ui.notifications.some((n) => n.level === "error")).toBe(true);
+  });
+
+  describe("copy subcommand", () => {
+    it("re-copies the current.md from an active session without hitting gh or the LLM", async () => {
+      respondBody("Original body");
+      await runCmd();
+      // Simulate an accepted tool call that wrote updated content.
+      const currentPath = Array.from(deps.files.keys()).find((p) =>
+        p.endsWith("/current.md"),
+      )!;
+      deps.files.set(currentPath, "Updated body");
+
+      const ghCallsBefore = deps.execCalls.filter((c) => c.cmd === "gh").length;
+      const sentBefore = pi.sent.length;
+
+      await runCmd("copy");
+
+      // No new gh calls, no new prompts.
+      expect(deps.execCalls.filter((c) => c.cmd === "gh").length).toBe(
+        ghCallsBefore,
+      );
+      expect(pi.sent.length).toBe(sentBefore);
+      // It piped current.md into pbcopy.
+      const pbcopy = deps.execCalls.find((c) => c.cmd === "pbcopy");
+      expect(pbcopy).toBeDefined();
+      expect(pbcopy!.input).toBe("Updated body");
+      // Confirmation notice was shown.
+      expect(ui.notifications.some((n) => n.level === "info")).toBe(true);
+    });
+
+    it("notifies an error when there is no active session to copy from", async () => {
+      await runCmd("copy");
+      expect(ui.notifications.some((n) => n.level === "error")).toBe(true);
+      expect(deps.execCalls.some((c) => c.cmd === "pbcopy")).toBe(false);
+      expect(deps.execCalls.some((c) => c.cmd === "gh")).toBe(false);
+    });
   });
 });
 
@@ -488,5 +542,38 @@ describe("update_pr_description tool", () => {
         ui,
       } as unknown),
     ).rejects.toThrow(/no active/i);
+  });
+
+  it("/update-pr-description copy still works after the agent's submission was accepted", async () => {
+    await startSession();
+    ui.nextCustomResult = true;
+    deps.execResponders.push((cmd) => {
+      if (cmd === "delta") return { stdout: "diff output" };
+      if (cmd === "pbcopy") return { stdout: "" };
+      return undefined;
+    });
+    const tool = getTool();
+    await tool.execute(
+      "id1",
+      { new_content: "Accepted body" },
+      undefined,
+      undefined,
+      { ui } as unknown,
+    );
+    // User clobbers clipboard somehow; pbcopy call count baseline:
+    const pbcopyBefore = deps.execCalls.filter(
+      (c) => c.cmd === "pbcopy",
+    ).length;
+
+    const cmd = pi.commands.find((c) => c.name === "update-pr-description")!;
+    await cmd.config.handler("copy", {
+      ui,
+      cwd: "/work",
+      hasUI: true,
+    } as unknown);
+
+    const pbcopyCalls = deps.execCalls.filter((c) => c.cmd === "pbcopy");
+    expect(pbcopyCalls.length).toBe(pbcopyBefore + 1);
+    expect(pbcopyCalls[pbcopyCalls.length - 1]!.input).toBe("Accepted body");
   });
 });
