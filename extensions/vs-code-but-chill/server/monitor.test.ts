@@ -3,6 +3,7 @@ import {
   parsePgrepOutput,
   parseWorkspaceHash,
   parseEslintWorkspaceHash,
+  parseCancellationDir,
   classifyKind,
   IdleDecisionEngine,
   type MonitoredProcess,
@@ -11,7 +12,7 @@ import {
 describe("parsePgrepOutput", () => {
   it("parses a tsserver row", () => {
     const out =
-      "12345 /usr/local/bin/node /path/tsserver.js --cancellationPipeName /tmp/tscancellation-abc.sock";
+      "12345 /usr/local/bin/node /path/tsserver.js --cancellationPipeName /tmp/wsdir/tscancellation-abc.sock";
     const rows = parsePgrepOutput(out);
     expect(rows).toEqual([
       {
@@ -19,8 +20,15 @@ describe("parsePgrepOutput", () => {
         args: expect.stringContaining("tsserver.js"),
         kind: "tsserver",
         workspaceHash: "abc",
+        activityPath: "/tmp/wsdir",
       },
     ]);
+  });
+
+  it("leaves activityPath null for eslintServer rows", () => {
+    const out =
+      "54321 node /ext/eslintServer.js --node-ipc --clientProcessId=11111";
+    expect(parsePgrepOutput(out)[0].activityPath).toBeNull();
   });
 
   it("parses an eslintServer row with clientProcessId=", () => {
@@ -33,6 +41,7 @@ describe("parsePgrepOutput", () => {
         args: expect.stringContaining("eslintServer.js"),
         kind: "eslint",
         workspaceHash: "eslint:11111",
+        activityPath: null,
       },
     ]);
   });
@@ -91,6 +100,38 @@ describe("parseWorkspaceHash", () => {
   });
 });
 
+describe("parseCancellationDir", () => {
+  it("returns the parent directory of --cancellationPipeName", () => {
+    const args =
+      "node tsserver.js --cancellationPipeName /var/folders/5j/T/vscode-typescript501/abc123/tscancellation-xyz.tmp";
+    expect(parseCancellationDir(args)).toBe(
+      "/var/folders/5j/T/vscode-typescript501/abc123",
+    );
+  });
+
+  it("strips VS Code's trailing `*` glob marker", () => {
+    const args =
+      "node tsserver.js --cancellationPipeName /tmp/vscode-typescript501/abc/tscancellation-xyz.tmp*";
+    expect(parseCancellationDir(args)).toBe("/tmp/vscode-typescript501/abc");
+  });
+
+  it("accepts the `--cancellationPipeName=<path>` equals form", () => {
+    const args =
+      "node tsserver.js --cancellationPipeName=/tmp/vscode-typescript501/abc/tscancellation-xyz.tmp";
+    expect(parseCancellationDir(args)).toBe("/tmp/vscode-typescript501/abc");
+  });
+
+  it("returns null when --cancellationPipeName is missing", () => {
+    expect(parseCancellationDir("node tsserver.js --locale en")).toBeNull();
+  });
+
+  it("returns null when the pipe path isn't absolute", () => {
+    expect(
+      parseCancellationDir("node tsserver.js --cancellationPipeName tsc.tmp"),
+    ).toBeNull();
+  });
+});
+
 describe("parseEslintWorkspaceHash", () => {
   it("returns null when clientProcessId is missing", () => {
     expect(parseEslintWorkspaceHash("node eslintServer.js --stdio")).toBeNull();
@@ -116,6 +157,7 @@ describe("IdleDecisionEngine", () => {
       args: "node /path/tsserver.js --cancellationPipeName /tmp/tscancellation-abc.sock",
       kind: "tsserver",
       workspaceHash: "abc",
+      activityPath: null,
       ...overrides,
     };
   }

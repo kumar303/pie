@@ -49,11 +49,16 @@ export async function runMonitorTick(
 
   for (const proc of processes) {
     const workspacePath = await opts.resolveWorkspacePath(proc);
-    const mtime = opts.workspaceMtimeAt(workspacePath);
+    // Prefer the process's own activityPath (tsserver's cancellation
+    // pipe dir) because lsof can't see tsserver's project files. For
+    // eslint and anything else without one, fall back to the resolved
+    // workspace path.
+    const mtimeSource = proc.activityPath ?? workspacePath;
+    const mtime = opts.workspaceMtimeAt(mtimeSource);
     const decision = opts.engine.shouldKill(proc, mtime);
     if (!decision.kill) {
       opts.log?.(
-        `skip pid=${proc.pid} kind=${proc.kind} workspace=${workspacePath ?? "?"}: ${decision.reason}`,
+        `skip pid=${proc.pid} kind=${proc.kind} workspace=${workspacePath ?? proc.activityPath ?? "?"}: ${decision.reason}`,
       );
       continue;
     }

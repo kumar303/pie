@@ -22,6 +22,13 @@ export interface MonitoredProcess {
    * editor window pid).
    */
   workspaceHash: string | null;
+  /**
+   * Filesystem path whose mtime tracks VS Code talking to this
+   * process. For tsserver: the `--cancellationPipeName` parent dir,
+   * which VS Code writes a new file into on every request. For
+   * eslintServer: null (we use the lsof-resolved workspace instead).
+   */
+  activityPath: string | null;
 }
 
 /**
@@ -51,6 +58,7 @@ export function parsePgrepOutput(output: string): MonitoredProcess[] {
         kind === "tsserver"
           ? parseWorkspaceHash(args)
           : parseEslintWorkspaceHash(args),
+      activityPath: kind === "tsserver" ? parseCancellationDir(args) : null,
     });
   }
   return rows;
@@ -66,6 +74,25 @@ export function classifyKind(args: string): ProcessKind | null {
 export function parseWorkspaceHash(args: string): string | null {
   const m = args.match(/tscancellation-([A-Za-z0-9]+)/);
   return m ? m[1] : null;
+}
+
+/**
+ * Extract the parent directory of `--cancellationPipeName` from a
+ * tsserver's argv. VS Code creates a new `tscancellation-*` file in
+ * that directory on every request, so the directory mtime is a
+ * direct "is VS Code talking to this workspace" signal.
+ *
+ * Returns null when the flag is missing, the value isn't absolute,
+ * or the path has no parent. VS Code appends a trailing `*` glob
+ * marker to the value, which we strip.
+ */
+export function parseCancellationDir(args: string): string | null {
+  const m = args.match(/--cancellationPipeName[=\s]+(\/[^\s*]+)/);
+  if (!m) return null;
+  const file = m[1];
+  const slash = file.lastIndexOf("/");
+  if (slash <= 0) return null;
+  return file.slice(0, slash);
 }
 
 /**
@@ -133,10 +160,7 @@ export class IdleDecisionEngine {
    * can't measure idleness, so we skip — better to leave a server
    * alone than to kill one we don't understand.
    */
-  shouldKill(
-    proc: MonitoredProcess,
-    workspaceMtimeMs: number,
-  ): IdleDecision {
+  shouldKill(proc: MonitoredProcess, workspaceMtimeMs: number): IdleDecision {
     const now = this.opts.clock();
     const prev = this.tracked.get(proc.pid);
     const firstSeenAt = prev?.firstSeenAt ?? now;

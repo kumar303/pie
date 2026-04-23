@@ -245,6 +245,105 @@ describe("runMonitorTick", () => {
     expect(schedule).toHaveBeenCalledWith("abc", 10);
   });
 
+  it("uses tsserver's activityPath (cancellationPipe dir) for the idleness mtime", async () => {
+    let t = 1_000_000_000;
+    const engine = makeEngine(() => t);
+    const runPgrep = vi
+      .fn()
+      .mockResolvedValue(
+        "42 node /path/tsserver.js --cancellationPipeName /tmp/ws-active/tscancellation-xyz.tmp",
+      );
+    const killProcess = vi.fn().mockResolvedValue(true);
+    const mtimeSeen: Array<string | undefined> = [];
+    const workspaceMtimeAt = (p: string | undefined) => {
+      mtimeSeen.push(p);
+      // Return fresh mtime (not idle) — kill should be skipped.
+      return t - 1000;
+    };
+
+    // Prime, then second tick past min-age.
+    await runMonitorTick({
+      runPgrep,
+      engine,
+      killProcess,
+      resolveWorkspacePath: async () => "/Users/me/proj",
+      workspaceMtimeAt,
+      emit: () => {},
+    });
+    t += MIN_AGE_MS + 1;
+    await runMonitorTick({
+      runPgrep,
+      engine,
+      killProcess,
+      resolveWorkspacePath: async () => "/Users/me/proj",
+      workspaceMtimeAt,
+      emit: () => {},
+    });
+
+    expect(killProcess).not.toHaveBeenCalled();
+    // workspaceMtimeAt must have been asked about the cancellation
+    // dir, NOT the lsof-resolved /Users/me/proj.
+    expect(mtimeSeen).toContain("/tmp/ws-active");
+    expect(mtimeSeen).not.toContain("/Users/me/proj");
+  });
+
+  it("logs tsserver's activityPath when the workspace path is unresolved", async () => {
+    const engine = makeEngine(() => 1_000_000_000);
+    const runPgrep = vi
+      .fn()
+      .mockResolvedValue(
+        "42 node /path/tsserver.js --cancellationPipeName /tmp/vscode-typescript501/abc/tscancellation-xyz.tmp",
+      );
+    const logs: string[] = [];
+    await runMonitorTick({
+      runPgrep,
+      engine,
+      killProcess: vi.fn().mockResolvedValue(true),
+      resolveWorkspacePath: async () => undefined,
+      workspaceMtimeAt: () => 1_000_000_000 - 1000,
+      emit: () => {},
+      log: (m) => logs.push(m),
+    });
+    expect(logs.some((l) => l.includes("abc"))).toBe(true);
+    expect(logs.every((l) => !l.includes("workspace=?"))).toBe(true);
+  });
+
+  it("uses eslint's resolved workspace path for the idleness mtime", async () => {
+    let t = 1_000_000_000;
+    const engine = makeEngine(() => t);
+    const runPgrep = vi
+      .fn()
+      .mockResolvedValue(
+        "42 node /ext/eslintServer.js --node-ipc --clientProcessId=111",
+      );
+    const killProcess = vi.fn().mockResolvedValue(true);
+    const mtimeSeen: Array<string | undefined> = [];
+    const workspaceMtimeAt = (p: string | undefined) => {
+      mtimeSeen.push(p);
+      return t - 1000;
+    };
+
+    await runMonitorTick({
+      runPgrep,
+      engine,
+      killProcess,
+      resolveWorkspacePath: async () => "/Users/me/eslint-proj",
+      workspaceMtimeAt,
+      emit: () => {},
+    });
+    t += MIN_AGE_MS + 1;
+    await runMonitorTick({
+      runPgrep,
+      engine,
+      killProcess,
+      resolveWorkspacePath: async () => "/Users/me/eslint-proj",
+      workspaceMtimeAt,
+      emit: () => {},
+    });
+
+    expect(mtimeSeen).toContain("/Users/me/eslint-proj");
+  });
+
   it("does not schedule respawn check when workspace hash is missing", async () => {
     let t = 1_000_000_000;
     const engine = makeEngine(() => t);
