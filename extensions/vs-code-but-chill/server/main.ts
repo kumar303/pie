@@ -12,35 +12,30 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { Registry, pathsFor, detectInvalidState } from "./registry.ts";
-import { KillDecisionEngine, parsePsOutput } from "./monitor.ts";
+import { IdleDecisionEngine, parsePgrepOutput } from "./monitor.ts";
 import { runMonitorTick } from "./monitor-loop.ts";
 import { IpcServer } from "./ipc.ts";
 import { LogWriter } from "./log.ts";
 import { errMessage } from "./errors.ts";
 import {
-  runPs,
-  runPsComm,
+  runPgrep,
   killWithTimeout,
   resolveWorkspacePath,
-  recentWorkspaceActivityAt,
+  workspaceMtimeAt,
 } from "./proc-utils.ts";
 
 interface Config {
-  fullMb: number;
-  partialMb: number;
-  eslintMb: number;
   tickMs: number;
-  minEtimeSec: number;
+  minAgeMs: number;
+  idleMs: number;
 }
 
 function readConfig(): Config {
   const env = process.env;
   return {
-    fullMb: Number(env.VSCBC_FULL_MB) || 2500,
-    partialMb: Number(env.VSCBC_PARTIAL_MB) || 800,
-    eslintMb: Number(env.VSCBC_ESLINT_MB) || 1500,
     tickMs: Number(env.VSCBC_TICK_MS) || 20 * 60 * 1000,
-    minEtimeSec: Number(env.VSCBC_MIN_ETIME_S) || 300,
+    minAgeMs: Number(env.VSCBC_MIN_AGE_MS) || 5 * 60 * 1000,
+    idleMs: Number(env.VSCBC_IDLE_MS) || 60 * 60 * 1000,
   };
 }
 
@@ -72,24 +67,13 @@ async function main(dataDir: string): Promise<void> {
 
   const config = readConfig();
   log.write(
-    `config full=${config.fullMb}MB partial=${config.partialMb}MB eslint=${config.eslintMb}MB tick=${config.tickMs}ms minEtime=${config.minEtimeSec}s`,
+    `config tick=${config.tickMs}ms minAge=${config.minAgeMs}ms idle=${config.idleMs}ms`,
   );
 
-  const engine = new KillDecisionEngine({
-    fullMb: config.fullMb,
-    partialMb: config.partialMb,
-    eslintMb: config.eslintMb,
-    minEtimeSeconds: config.minEtimeSec,
-    // Recent workspace activity hook — lightweight heuristic only.
-    recentWorkspaceModifiedAt: (proc) =>
-      recentWorkspaceActivityAt(workspaceCache.get(proc.workspaceHash ?? "")),
+  const engine = new IdleDecisionEngine({
+    minAgeMs: config.minAgeMs,
+    idleMs: config.idleMs,
   });
-
-  // Last known snapshot for the `status` IPC request
-  let lastProcesses: Awaited<ReturnType<typeof runMonitorTick>>["processes"] =
-    [];
-  let killCount = 0;
-  const startedAt = Date.now();
 
   // Cache: workspace hash → resolved filesystem path.
   const workspaceCache = new Map<string, string | undefined>();
@@ -97,7 +81,7 @@ async function main(dataDir: string): Promise<void> {
   const cachedResolveWorkspacePath = async (proc: {
     pid: number;
     workspaceHash: string | null;
-  }) => {
+  }): Promise<string | undefined> => {
     const key = proc.workspaceHash ?? "";
     if (key && workspaceCache.has(key)) return workspaceCache.get(key);
     const resolved = await resolveWorkspacePath(proc);
@@ -166,29 +150,21 @@ async function main(dataDir: string): Promise<void> {
         void shutdown("last client disconnected");
       }
     },
-    getStatus: () => ({
-      uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
-      killed: killCount,
-      watching: lastProcesses.map((p) => ({
-        pid: p.pid,
-        rssMb: Math.round(p.rssKb / 1024),
-        kind: p.kind,
-        mode: p.mode,
-        workspace: p.workspaceHash,
-        etimeSec: p.etimeSeconds,
-      })),
-    }),
-    getLogs: (tail) => log.tail(tail),
     onStop: () => {
       void shutdown("stop command");
     },
+    onReap: async () => {
+      log.write("reap requested by client");
+      const result = await safeTick();
+      log.write(
+        result.ok
+          ? `reap done killed=${result.killed}`
+          : `reap failed: ${result.error}`,
+      );
+      return result;
+    },
   });
   await ipc.start();
-
-  // Stream new log lines to event-subscribers (the log viewer).
-  log.onLine((line) => {
-    ipc.broadcastLog(line);
-  });
 
   /**
    * PLAN.md verification: ~10 seconds after a kill, re-run ps and
@@ -199,8 +175,8 @@ async function main(dataDir: string): Promise<void> {
     setTimeout(() => {
       void (async () => {
         try {
-          const raw = await runPs();
-          const procs = parsePsOutput(raw);
+          const raw = await runPgrep();
+          const procs = parsePgrepOutput(raw);
           const found = procs.find(
             (p) => p.workspaceHash === workspaceHash && p.pid !== killedPid,
           );
@@ -216,43 +192,69 @@ async function main(dataDir: string): Promise<void> {
     }, 10_000).unref();
   };
 
-  const tick = async () => {
+  /**
+   * Run the monitoring pass once.
+   *
+   * Returns the number of processes killed this tick so the `reap`
+   * IPC handler can report an accurate count back to the caller. On
+   * failure it logs and broadcasts an error event (as before) and
+   * rethrows — the interval wrapper catches; `reap` surfaces the
+   * error to the client as `{ ok: false, error }`.
+   */
+  const tick = async (): Promise<number> => {
+    registry.pruneDeadClients();
+    if (registry.clientCount === 0) {
+      // No live clients — nothing is listening; keep running but skip work
+    }
+    const result = await runMonitorTick({
+      runPgrep,
+      engine,
+      killProcess: (pid) => killWithTimeout(pid),
+      resolveWorkspacePath: cachedResolveWorkspacePath,
+      workspaceMtimeAt,
+      emit: (ev) => {
+        ipc.broadcastKilled(ev);
+        log.write(
+          `killed ${ev.kind} pid=${ev.pid} workspace=${ev.workspacePath ?? ev.workspace ?? "?"} reason=${ev.reason}`,
+        );
+      },
+      log: (msg) => log.write(msg),
+      scheduleRespawnCheck,
+    });
+    return result.killed.length;
+  };
+
+  /**
+   * Wrap `tick()` with the one-and-only error path: on failure, log
+   * the error, broadcast it to event subscribers, and return an
+   * `{ ok: false, error }` result. The interval loop ignores the
+   * return; the `reap` handler forwards it to the requesting client
+   * so users get the same "went wrong" signal either way.
+   */
+  const safeTick = async (): Promise<{
+    ok: boolean;
+    killed: number;
+    error?: string;
+  }> => {
     try {
-      registry.pruneDeadClients();
-      if (registry.clientCount === 0) {
-        // No live clients — nothing is listening; keep running but skip work
-      }
-      const result = await runMonitorTick({
-        runPs,
-        runPsComm,
-        engine,
-        killProcess: (pid) => killWithTimeout(pid),
-        resolveWorkspacePath: cachedResolveWorkspacePath,
-        emit: (ev) => {
-          ipc.broadcastEvent(ev);
-          log.write(
-            `killed ${ev.kind} pid=${ev.pid} mode=${ev.mode} rss=${ev.rssMb}MB workspace=${ev.workspacePath ?? ev.workspace ?? "?"} reason=${ev.reason}`,
-          );
-        },
-        log: (msg) => log.write(msg),
-        scheduleRespawnCheck,
-      });
-      lastProcesses = result.processes;
-      killCount += result.killed.length;
+      const killed = await tick();
+      return { ok: true, killed };
     } catch (err) {
-      log.write(`tick error: ${errMessage(err)}`);
-      ipc.broadcastEvent({
-        type: "error",
-        message: errMessage(err),
-      });
+      const message = errMessage(err);
+      // The log write fans out to event subscribers via `log.onLine`
+      // → `ipc.broadcastLog`, so a second `ipc.broadcastEvent({type:
+      // "error"})` here would show the same failure twice in the log
+      // viewer. Keep the canonical single entry.
+      log.write(`tick error: ${message}`);
+      return { ok: false, killed: 0, error: message };
     }
   };
 
   const tickHandle = setInterval(() => {
-    void tick();
+    void safeTick();
   }, config.tickMs);
   // Run one tick at startup to prime state.
-  void tick();
+  void safeTick();
 
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));

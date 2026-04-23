@@ -12,11 +12,14 @@ import type {
   ExtensionCommandContext,
 } from "@mariozechner/pi-coding-agent";
 import { Text, matchesKey, Key, truncateToWidth } from "@mariozechner/pi-tui";
+import { watch, type FSWatcher } from "node:fs";
 import { IpcClient } from "./server/ipc-client.ts";
 import { defaultDataDir, ensureServer, onTypedMessage } from "./client.ts";
+import { pathsFor } from "./server/registry.ts";
 import { spawnServer } from "./spawn.ts";
 import { errMessage, reportConsole } from "./server/errors.ts";
 import { sleep } from "./server/util.ts";
+import { readLogTail } from "./log-file-reader.ts";
 import {
   initialState,
   applyFollow,
@@ -43,6 +46,11 @@ const SUBCOMMANDS: Array<{
   { value: "help", label: "help", description: "Show help" },
   { value: "logs", label: "logs", description: "Open the log viewer" },
   {
+    value: "reap",
+    label: "reap",
+    description: "Run a monitoring check immediately",
+  },
+  {
     value: "start",
     label: "start",
     description: "Start the background server (no-op if running)",
@@ -52,59 +60,41 @@ const SUBCOMMANDS: Array<{
 
 export default function (pi: ExtensionAPI) {
   const dataDir = defaultDataDir();
+  const logFilePath = pathsFor(dataDir).logFile;
   let client: IpcClient | null = null;
-  /** Tail of recent log lines for the viewer. */
-  const recentLog: string[] = [];
-  const MAX_RECENT = 2000;
   let notify:
     | ((msg: string, type?: "info" | "warning" | "error") => void)
     | null = null;
-  /** Listeners interested in new log lines (for follow-mode viewer). */
-  const logListeners = new Set<(line: string) => void>();
 
-  function pushLog(line: string): void {
-    recentLog.push(line);
-    if (recentLog.length > MAX_RECENT) {
-      recentLog.splice(0, recentLog.length - MAX_RECENT);
-    }
-    for (const l of logListeners) {
-      try {
-        l(line);
-      } catch (err) {
-        // Listener throwing is a bug — surface it and keep going so
-        // one broken overlay doesn't silence the rest.
-        reportConsole("log listener error", err);
-      }
-    }
+  // Dedupe concurrent connect() calls — pi has been observed to fire
+  // session_start twice in quick succession, and two blind connects
+  // would orphan the earlier socket.
+  let connectInFlight: Promise<boolean> | null = null;
+
+  function connect(): Promise<boolean> {
+    if (connectInFlight) return connectInFlight;
+    if (client) return Promise.resolve(true);
+    connectInFlight = doConnect().finally(() => {
+      connectInFlight = null;
+    });
+    return connectInFlight;
   }
 
-  /** Timestamped local log entry (used for client-side lifecycle events). */
-  function pushClientLog(msg: string): void {
-    pushLog(`[${new Date().toISOString()}] ${msg}`);
-  }
-
-  async function connect(): Promise<boolean> {
-    pushClientLog(
-      "client: starting vs-code-but-chill monitor (connecting to server...)",
-    );
+  async function doConnect(): Promise<boolean> {
     try {
-      const { client: c, respawned } = await ensureServer({
+      const { client: c } = await ensureServer({
         dataDir,
         spawnServer: (dir) => spawnServer(SERVER_MAIN, dir),
       });
       client = c;
 
       c.onError((err) => {
-        if (shuttingDown) {
-          // Expected: we're tearing down, the socket close is ours.
-          pushClientLog(`client: socket closed during shutdown`);
-          return;
-        }
+        // A socket close during our own teardown isn't a failure.
+        if (shuttingDown) return;
         notify?.(
           `vs-code-but-chill: server connection lost: ${err.message}`,
           "warning",
         );
-        pushClientLog(`client: server connection lost: ${err.message}`);
       });
 
       onTypedMessage(c, {
@@ -112,34 +102,19 @@ export default function (pi: ExtensionAPI) {
           const where = msg.workspacePath ?? msg.workspace ?? "<unknown>";
           const label = msg.kind === "eslint" ? "eslintServer" : "tsserver";
           notify?.(
-            `/vs-code-but-chill: killed ${label} (${msg.rssMb} MB) in ${where}`,
+            `/vs-code-but-chill: killed idle ${label} in ${where}`,
             "info",
           );
-          pushLog(
-            `[killed] ${msg.kind} pid=${msg.pid} mode=${msg.mode} rss=${msg.rssMb}MB workspace=${where}`,
-          );
         },
-        error: (msg) => {
-          notify?.(`vs-code-but-chill: ${msg.message}`, "warning");
-          pushLog(`[error] ${msg.message}`);
-        },
-        log: (msg) => {
-          pushLog(msg.line);
+        reap: (msg) => {
+          const next = pendingReaps.shift();
+          if (next) next({ ok: msg.ok, killed: msg.killed, error: msg.error });
         },
       });
 
       c.send({ type: "hello", pid: process.pid });
-      c.send({ type: "events" });
-      // Prime with recent log lines
-      c.send({ type: "logs", tail: 500 });
-      pushClientLog(
-        respawned
-          ? `client: monitor started (spawned new server, pid=${process.pid} as client)`
-          : `client: monitor connected (attached to existing server, pid=${process.pid} as client)`,
-      );
       return true;
     } catch (err) {
-      pushClientLog(`client: could not connect to server: ${errMessage(err)}`);
       notify?.(
         `vs-code-but-chill: could not start server: ${errMessage(err)}`,
         "error",
@@ -148,32 +123,33 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  /** Handle to clear the status-bar indicator on shutdown. */
   let clearStatus: (() => void) | null = null;
-  /**
-   * Set once we've initiated our own shutdown, so the connection-lost
-   * handler can stay quiet about the socket closing — we closed it.
-   */
+  // Set during our own teardown so the connection-lost handler stays quiet.
   let shuttingDown = false;
 
-  pi.on("session_start", async (_event, ctx) => {
+  // FIFO queue of one-shot listeners for `reap` responses. Lets
+  // overlapping /reap requests resolve in send order.
+  const pendingReaps: Array<
+    (r: { ok: boolean; killed: number; error?: string }) => void
+  > = [];
+
+  pi.on("session_start", (_event, ctx) => {
+    // pi runs lifecycle hooks serially; awaiting connect() (~2s cold
+    // start) would block the prompt. Fire-and-forget.
     notify = (m, t) => ctx.ui.notify(m, t);
-    const ok = await connect();
-    if (ok) {
-      ctx.ui.notify(
-        "vs-code-but-chill: monitor running · try /vs-code-but-chill help",
-        "info",
-      );
-      ctx.ui.setStatus(STATUS_KEY, STATUS_TEXT);
-      clearStatus = () => ctx.ui.setStatus(STATUS_KEY, undefined);
-    }
+    void (async () => {
+      const ok = await connect();
+      if (ok) {
+        // Status bar is the only indicator — no startup notification.
+        ctx.ui.setStatus(STATUS_KEY, STATUS_TEXT);
+        clearStatus = () => ctx.ui.setStatus(STATUS_KEY, undefined);
+      }
+    })();
   });
 
   /**
-   * Drop the status-bar indicator and disconnect from the server.
-   * Safe to call multiple times. `sendBye` controls whether we notify
-   * the server we're leaving (true on session end; false on an
-   * explicit `stop` where we've already asked the server to exit).
+   * Drop the status indicator and disconnect. `sendBye=true` on session
+   * end; `false` on explicit /stop where the server is already exiting.
    */
   async function teardown(opts: { sendBye: boolean }): Promise<void> {
     shuttingDown = true;
@@ -186,21 +162,21 @@ export default function (pi: ExtensionAPI) {
         try {
           client.send({ type: "bye", pid: process.pid });
         } catch (err) {
-          // IpcClient.send guards against a missing or destroyed
-          // socket, but a write that races with remote close can still
-          // surface EPIPE. Surface it so we don't lose the signal.
+          // A write racing with remote close can surface EPIPE.
           reportConsole("sending bye during shutdown failed", err);
         }
       }
-      // Give any outgoing message a tick to flush before closing.
+      // Let the bye flush before closing the socket.
       await sleep(50);
       client.disconnect();
       client = null;
     }
   }
 
-  pi.on("session_shutdown", async () => {
-    await teardown({ sendBye: true });
+  pi.on("session_shutdown", () => {
+    // Fire-and-forget so we don't delay pi's exit; the server will
+    // notice the dropped connection even without a clean bye.
+    void teardown({ sendBye: true });
   });
 
   pi.registerCommand("vs-code-but-chill", {
@@ -226,26 +202,95 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify("/vs-code-but-chill logs requires TUI mode", "error");
           return;
         }
-        await showLogs(ctx, recentLog, logListeners);
+        await showLogs(ctx, logFilePath);
+        return;
+      }
+      if (sub === "reap") {
+        // The command can dispatch before session_start's background
+        // connect finishes; wait on it rather than spawning a fresh one.
+        if (!client && connectInFlight) {
+          await connectInFlight;
+        }
+        if (!client) {
+          ctx.ui.notify("vs-code-but-chill: server is not running", "warning");
+          return;
+        }
+        // Don't await the response: pi serializes handlers and a tick
+        // can take seconds. Surface the outcome as a later notification,
+        // with a timeout so a dead socket doesn't leave the user hanging.
+        const timeoutMs = Number(process.env.VSCBC_REAP_TIMEOUT_MS) || 60_000;
+        let settled = false;
+        const resolver = (result: {
+          ok: boolean;
+          killed: number;
+          error?: string;
+        }) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (!result.ok) {
+            ctx.ui.notify(
+              `vs-code-but-chill: reap failed${
+                result.error ? ": " + result.error : ""
+              }`,
+              "warning",
+            );
+            return;
+          }
+          if (result.killed === 0) {
+            ctx.ui.notify(
+              "vs-code-but-chill: reap ran — nothing to kill",
+              "info",
+            );
+          } else {
+            ctx.ui.notify(
+              `vs-code-but-chill: reap killed ${result.killed} process${
+                result.killed === 1 ? "" : "es"
+              }`,
+              "info",
+            );
+          }
+        };
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          // Remove so a late response doesn't bind to this resolver.
+          const i = pendingReaps.indexOf(resolver);
+          if (i >= 0) pendingReaps.splice(i, 1);
+          ctx.ui.notify(
+            `vs-code-but-chill: reap timed out after ${Math.round(
+              timeoutMs / 1000,
+            )}s — no response from server`,
+            "warning",
+          );
+        }, timeoutMs);
+        pendingReaps.push(resolver);
+        client.send({ type: "reap" });
+        ctx.ui.notify("vs-code-but-chill: reap requested…", "info");
         return;
       }
       if (sub === "start") {
-        if (client) {
-          // Already connected — nothing to do.
-          return;
-        }
-        // Previously stopped (or never started this session): run the
-        // normal connect path, which will spawn a fresh server if
-        // needed and restore the status indicator.
+        if (client) return;
+        // Fire-and-forget for the same reason as session_start.
         shuttingDown = false;
-        const ok = await connect();
-        if (ok) {
-          ctx.ui.setStatus(STATUS_KEY, STATUS_TEXT);
-          clearStatus = () => ctx.ui.setStatus(STATUS_KEY, undefined);
-        }
+        void (async () => {
+          const ok = await connect();
+          if (ok) {
+            ctx.ui.setStatus(STATUS_KEY, STATUS_TEXT);
+            clearStatus = () => ctx.ui.setStatus(STATUS_KEY, undefined);
+            ctx.ui.notify(
+              "vs-code-but-chill: start sent; monitor running",
+              "info",
+            );
+          }
+        })();
         return;
       }
       if (sub === "stop") {
+        // Same rationale as reap: wait on the in-flight connect.
+        if (!client && connectInFlight) {
+          await connectInFlight;
+        }
         if (!client) {
           ctx.ui.notify("vs-code-but-chill: server is not running", "warning");
           return;
@@ -255,11 +300,9 @@ export default function (pi: ExtensionAPI) {
           "vs-code-but-chill: stop sent; server will shut down",
           "info",
         );
-        // The server acknowledged the stop and will close the socket;
-        // run our own teardown so the status indicator disappears and
-        // we don't emit a spurious "connection lost" warning. No need
-        // to send `bye` — the stop command already asked it to exit.
-        await teardown({ sendBye: false });
+        // No `bye` — /stop already asked the server to exit. Teardown
+        // clears our status and suppresses the connection-lost warning.
+        void teardown({ sendBye: false });
         return;
       }
       ctx.ui.notify(
@@ -277,6 +320,7 @@ async function showHelp(ctx: ExtensionCommandContext): Promise<void> {
     "  /vs-code-but-chill        — show this help",
     "  /vs-code-but-chill help   — show this help",
     "  /vs-code-but-chill logs   — open the log viewer (follow mode; ↑/↓, d/u, g/G, q)",
+    "  /vs-code-but-chill reap   — run a monitoring check immediately",
     "  /vs-code-but-chill start  — start the background server (no-op if running)",
     "  /vs-code-but-chill stop   — stop the background server",
     "",
@@ -318,10 +362,12 @@ async function showHelp(ctx: ExtensionCommandContext): Promise<void> {
   });
 }
 
+/** Max lines to keep in-memory for the viewer. */
+const LOG_VIEWER_CAP = 2000;
+
 async function showLogs(
   ctx: ExtensionCommandContext,
-  buffer: string[],
-  listeners: Set<(line: string) => void>,
+  logFilePath: string,
 ): Promise<void> {
   await ctx.ui.custom<void>((tui, theme, _kb, done) => {
     let state = initialState();
@@ -330,13 +376,48 @@ async function showLogs(
     const text = new Text("", 0, 0);
     const bodyHeight = () => Math.max(1, height - 3);
 
-    const listener = (line: string) => {
-      buffer.push(line);
-      state = onNewLine(state);
+    // Seed the buffer by reading the log file once. Follow mode
+    // refreshes the tail whenever the file changes.
+    let buffer: string[] = readLogTail(logFilePath, LOG_VIEWER_CAP);
+
+    /**
+     * Re-read the file tail and diff against the buffer. New lines
+     * count as "arrivals" so paused viewers see their pending count
+     * go up without the offset jumping.
+     */
+    const refresh = () => {
+      const fresh = readLogTail(logFilePath, LOG_VIEWER_CAP);
+      // Heuristic: if the fresh tail is longer, the difference is new.
+      // After rotation the tail shrinks — reset to avoid confusing the
+      // user with negative pending counts.
+      let newCount = 0;
+      if (fresh.length >= buffer.length) {
+        newCount = Math.max(0, fresh.length - buffer.length);
+      }
+      buffer = fresh;
+      for (let i = 0; i < newCount; i++) {
+        state = onNewLine(state);
+      }
       rebuild();
       tui.requestRender();
     };
-    listeners.add(listener);
+
+    let watcher: FSWatcher | null = null;
+    try {
+      // `fs.watch` emits on both content change and rename (which is
+      // how rotation looks). Swallow errors during close.
+      watcher = watch(logFilePath, { persistent: false }, () => refresh());
+      watcher.on("error", (err) => {
+        // Not user-actionable; surface to console so it's visible in
+        // development.
+        reportConsole("log file watch error", err);
+      });
+    } catch (err) {
+      // `watch` throws if the file doesn't exist yet. That's fine —
+      // we'll just render the seeded (possibly empty) buffer and let
+      // the user re-open the viewer once the server has written.
+      reportConsole("log file watch init failed", err);
+    }
 
     const rebuild = () => {
       state = applyFollow(state, buffer.length, bodyHeight());
@@ -381,7 +462,13 @@ async function showLogs(
       },
       handleInput: (data: string) => {
         if (matchesKey(data, Key.escape) || matchesKey(data, "q")) {
-          listeners.delete(listener);
+          if (watcher) {
+            try {
+              watcher.close();
+            } catch {
+              // Already closed — nothing to do.
+            }
+          }
           done(undefined);
           return;
         }

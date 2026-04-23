@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
   deepestCommonAncestor,
   parseLsofFnPaths,
-  recentWorkspaceActivityAt,
+  workspaceMtimeAt,
 } from "./proc-utils.ts";
 
 describe("deepestCommonAncestor", () => {
@@ -51,22 +51,21 @@ describe("parseLsofFnPaths", () => {
   });
 });
 
-describe("recentWorkspaceActivityAt", () => {
+describe("workspaceMtimeAt", () => {
   it("returns 0 for undefined root", () => {
-    expect(recentWorkspaceActivityAt(undefined)).toBe(0);
+    expect(workspaceMtimeAt(undefined)).toBe(0);
   });
 
   it("returns 0 for non-existent path", () => {
-    expect(recentWorkspaceActivityAt("/no/such/dir/abc123")).toBe(0);
+    expect(workspaceMtimeAt("/no/such/dir/abc123")).toBe(0);
   });
 
-  it("returns a recent unix-seconds timestamp for a just-touched dir", () => {
+  it("returns a recent ms timestamp for a just-touched dir", () => {
     const dir = mkdtempSync(join(tmpdir(), "vscbc-activity-"));
-    // Force an mtime bump by writing a file
     writeFileSync(join(dir, "x.ts"), "// hi");
-    const t = recentWorkspaceActivityAt(dir);
-    const now = Math.floor(Date.now() / 1000);
-    expect(t).toBeGreaterThan(now - 5);
-    expect(t).toBeLessThanOrEqual(now + 1);
+    const t = workspaceMtimeAt(dir);
+    const now = Date.now();
+    expect(t).toBeGreaterThan(now - 5000);
+    expect(t).toBeLessThanOrEqual(now + 1000);
   });
 });

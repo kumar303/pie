@@ -24,8 +24,6 @@ function makeServer(dataDir: string) {
   return new IpcServer(pathsFor(dataDir).socketPath, {
     onHello: () => {},
     onBye: () => {},
-    getStatus: () => ({ uptimeSec: 0, killed: 0, watching: [] }),
-    getLogs: () => [],
   });
 }
 

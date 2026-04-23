@@ -14,25 +14,39 @@ import { sleep } from "./util.ts";
 
 const execFileP = promisify(execFile);
 
-/** Run ps and return stdout. Args mirror the PLAN.md snippet. */
-export async function runPs(): Promise<string> {
-  const { stdout } = await execFileP(
-    "/bin/ps",
-    ["-eo", "pid,ppid,rss,etime,args"],
-    { maxBuffer: 10 * 1024 * 1024 },
-  );
-  return stdout;
-}
-
 /**
- * Run `ps -eo pid,comm=` for parent-comm lookup.
- * We use `comm=` so ps omits the header; our parser handles either form.
+ * Run `pgrep -afl <pattern>` and return stdout. `pgrep` is the only
+ * unprivileged enumeration tool available — `/bin/ps` is setuid root
+ * and macOS rejects the exec in our sandbox context.
+ *
+ * We issue two calls because pgrep regex matches any single substring
+ * and we want both tsserver.js and eslintServer.js. Results are
+ * concatenated; callers feed the combined output to parsePgrepOutput.
  */
-export async function runPsComm(): Promise<string> {
-  const { stdout } = await execFileP("/bin/ps", ["-eo", "pid,comm="], {
-    maxBuffer: 10 * 1024 * 1024,
-  });
-  return stdout;
+export async function runPgrep(): Promise<string> {
+  const patterns = ["tsserver\\.js", "eslintServer\\.js"];
+  const results = await Promise.all(
+    patterns.map(async (pat) => {
+      try {
+        const { stdout } = await execFileP("/usr/bin/pgrep", ["-afl", pat], {
+          maxBuffer: 10 * 1024 * 1024,
+        });
+        return stdout;
+      } catch (err) {
+        // Exit code 1 = no matches. That's not an error — return empty.
+        if (
+          err &&
+          typeof err === "object" &&
+          "code" in err &&
+          (err as { code: unknown }).code === 1
+        ) {
+          return "";
+        }
+        throw err;
+      }
+    }),
+  );
+  return results.join("\n");
 }
 
 /**
@@ -125,7 +139,11 @@ export async function resolveWorkspacePath(proc: {
       { maxBuffer: 1024 * 1024 },
     );
     const [first] = parseLsofFnPaths(stdout);
-    if (first) return first;
+    // Reject useless fallbacks like `/` or `/private/var/...`: those
+    // aren't real workspaces, and using them leads to either false
+    // negatives (`/` mtime bumps constantly) or meaningless activity
+    // signals.
+    if (first && first.startsWith(home) && first !== home) return first;
   } catch {
     // We've exhausted fallbacks; function returns undefined and the
     // caller treats the workspace as unknown.
@@ -134,23 +152,16 @@ export async function resolveWorkspacePath(proc: {
 }
 
 /**
- * Return the most recent mtime (unix seconds) for any `.ts`/`.tsx`/`.js`
- * file under the given workspace root, searching up to 2 levels deep.
- * Returns 0 when the path is unknown, unreadable, or has no matches.
- *
- * Best-effort: we deliberately keep the search shallow to avoid a
- * several-minute walk of huge monorepos. The "recent activity"
- * window PLAN.md specifies is 30 seconds, so catching *any* recent
- * edit at the root is sufficient — if an editor saved a file, the
- * workspace directory mtime will update too.
+ * Return the workspace root's mtime in ms since epoch, or 0 if the
+ * path is unknown or unreadable. Directory mtime bumps on every
+ * create/delete/rename in the directory — i.e. every editor save —
+ * so it's a good "is anyone working here" signal without walking
+ * the tree.
  */
-export function recentWorkspaceActivityAt(root: string | undefined): number {
+export function workspaceMtimeAt(root: string | undefined): number {
   if (!root) return 0;
   try {
-    const s = statSync(root);
-    // Directory mtime updates whenever immediate children change,
-    // which is enough to detect "something was saved here recently".
-    return Math.floor(s.mtimeMs / 1000);
+    return statSync(root).mtimeMs;
   } catch {
     return 0;
   }

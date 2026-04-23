@@ -1,96 +1,83 @@
 import { describe, it, expect, vi } from "vitest";
 import { runMonitorTick } from "./monitor-loop.ts";
-import { KillDecisionEngine } from "./monitor.ts";
+import { IdleDecisionEngine } from "./monitor.ts";
 
-function makePsOutput(
-  rows: Array<{
-    pid: number;
-    rssKb: number;
-    etimeSec: number;
-    /** Workspace hash; pass `null` to omit --cancellationPipeName entirely. */
-    workspace?: string | null;
-    partial?: boolean;
-  }>,
+const MIN_AGE_MS = 5 * 60 * 1000;
+const IDLE_MS = 60 * 60 * 1000;
+
+function pgrep(
+  rows: Array<{ pid: number; workspace?: string | null; eslint?: boolean }>,
 ): string {
-  const lines = rows.map((r) => {
-    const mins = Math.floor(r.etimeSec / 60);
-    const secs = r.etimeSec % 60;
-    const etime = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-    const cancelArg =
-      r.workspace === null
-        ? ""
-        : ` --cancellationPipeName /tmp/tscancellation-${r.workspace ?? "abc"}.sock`;
-    const args =
-      `node /path/tsserver.js${r.partial ? " --serverMode partialSemantic" : ""}` +
-      cancelArg;
-    return `${r.pid} 1 ${r.rssKb} ${etime} ${args}`;
+  return rows
+    .map((r) => {
+      if (r.eslint) {
+        return `${r.pid} node /ext/eslintServer.js --node-ipc --clientProcessId=${r.workspace ?? 0}`;
+      }
+      const cancel =
+        r.workspace === null
+          ? ""
+          : ` --cancellationPipeName /tmp/tscancellation-${r.workspace ?? "abc"}.sock`;
+      return `${r.pid} node /path/tsserver.js${cancel}`;
+    })
+    .join("\n");
+}
+
+function makeEngine(now: () => number) {
+  return new IdleDecisionEngine({
+    minAgeMs: MIN_AGE_MS,
+    idleMs: IDLE_MS,
+    clock: now,
   });
-  return "PID PPID RSS ELAPSED COMMAND\n" + lines.join("\n");
 }
 
 describe("runMonitorTick", () => {
-  it("does not kill on first sight", async () => {
-    const engine = new KillDecisionEngine({
-      fullMb: 2500,
-      partialMb: 800,
-      eslintMb: 1500,
-      minEtimeSeconds: 300,
-    });
-    const kill = vi.fn();
-    const runPs = vi
-      .fn()
-      .mockResolvedValue(
-        makePsOutput([{ pid: 10, rssKb: 3000 * 1024, etimeSec: 1000 }]),
-      );
+  it("does not kill on first sight (process too young)", async () => {
+    const t = 1_000_000_000;
+    const engine = makeEngine(() => t);
+    const killProcess = vi.fn();
+    const runPgrep = vi.fn().mockResolvedValue(pgrep([{ pid: 10 }]));
     const result = await runMonitorTick({
-      runPs,
+      runPgrep,
       engine,
-      killProcess: kill,
-      resolveWorkspacePath: async () => undefined,
+      killProcess,
+      resolveWorkspacePath: async () => "/home/me/project",
+      workspaceMtimeAt: () => t - 10 * IDLE_MS, // long-idle
       emit: () => {},
     });
-    expect(kill).not.toHaveBeenCalled();
+    expect(killProcess).not.toHaveBeenCalled();
     expect(result.killed).toHaveLength(0);
     expect(result.processes).toHaveLength(1);
   });
 
-  it("kills after growth confirmed", async () => {
-    const engine = new KillDecisionEngine({
-      fullMb: 2500,
-      partialMb: 800,
-      eslintMb: 1500,
-      minEtimeSeconds: 300,
-    });
-    const killFn = vi.fn().mockResolvedValue(true);
-    const runPs = vi
-      .fn()
-      .mockResolvedValue(
-        makePsOutput([{ pid: 10, rssKb: 3000 * 1024, etimeSec: 1000 }]),
-      );
+  it("kills once min-age has passed and workspace is idle", async () => {
+    let t = 1_000_000_000;
+    const engine = makeEngine(() => t);
+    const killProcess = vi.fn().mockResolvedValue(true);
+    const runPgrep = vi.fn().mockResolvedValue(pgrep([{ pid: 10 }]));
     const emit = vi.fn();
+    const workspaceMtimeAt = () => t - 10 * IDLE_MS;
 
-    // First tick — primes tracking
+    // prime
     await runMonitorTick({
-      runPs,
+      runPgrep,
       engine,
-      killProcess: killFn,
+      killProcess,
       resolveWorkspacePath: async () => "/home/me/project",
+      workspaceMtimeAt,
       emit,
     });
-    expect(killFn).not.toHaveBeenCalled();
+    expect(killProcess).not.toHaveBeenCalled();
 
-    // Second tick — same pid, same-or-higher RSS → kill
-    runPs.mockResolvedValueOnce(
-      makePsOutput([{ pid: 10, rssKb: 3100 * 1024, etimeSec: 1020 }]),
-    );
+    t += MIN_AGE_MS + 1;
     const result = await runMonitorTick({
-      runPs,
+      runPgrep,
       engine,
-      killProcess: killFn,
+      killProcess,
       resolveWorkspacePath: async () => "/home/me/project",
+      workspaceMtimeAt,
       emit,
     });
-    expect(killFn).toHaveBeenCalledWith(10);
+    expect(killProcess).toHaveBeenCalledWith(10);
     expect(result.killed).toEqual([10]);
     expect(emit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -99,51 +86,46 @@ describe("runMonitorTick", () => {
         kind: "tsserver",
         workspace: "abc",
         workspacePath: "/home/me/project",
-        mode: "full",
       }),
     );
   });
 
   it("kills an eslintServer and emits kind=eslint", async () => {
-    const engine = new KillDecisionEngine({
-      fullMb: 2500,
-      partialMb: 800,
-      eslintMb: 1500,
-      minEtimeSeconds: 300,
-    });
-    const killFn = vi.fn().mockResolvedValue(true);
-    const psOut = (rss: number, etime: string) =>
-      [
-        "PID PPID RSS ELAPSED COMMAND",
-        `54321 11111 ${rss} ${etime} node /ext/eslintServer.js --node-ipc --clientProcessId=11111`,
-      ].join("\n");
-    const runPs = vi.fn().mockResolvedValueOnce(psOut(1700 * 1024, "10:00"));
+    let t = 1_000_000_000;
+    const engine = makeEngine(() => t);
+    const killProcess = vi.fn().mockResolvedValue(true);
+    const runPgrep = vi
+      .fn()
+      .mockResolvedValue(
+        pgrep([{ pid: 54321, eslint: true, workspace: "11111" }]),
+      );
     const emit = vi.fn();
+    const workspaceMtimeAt = () => t - 10 * IDLE_MS;
 
-    // Prime
     await runMonitorTick({
-      runPs,
+      runPgrep,
       engine,
-      killProcess: killFn,
+      killProcess,
       resolveWorkspacePath: async () => "/home/me/project",
+      workspaceMtimeAt,
       emit,
     });
-    expect(killFn).not.toHaveBeenCalled();
+    expect(killProcess).not.toHaveBeenCalled();
 
-    runPs.mockResolvedValueOnce(psOut(1800 * 1024, "10:05"));
+    t += MIN_AGE_MS + 1;
     const result = await runMonitorTick({
-      runPs,
+      runPgrep,
       engine,
-      killProcess: killFn,
+      killProcess,
       resolveWorkspacePath: async () => "/home/me/project",
+      workspaceMtimeAt,
       emit,
     });
-    expect(killFn).toHaveBeenCalledWith(54321);
+    expect(killProcess).toHaveBeenCalledWith(54321);
     expect(result.killed).toEqual([54321]);
     expect(emit).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "killed",
-        pid: 54321,
         kind: "eslint",
         workspace: "eslint:11111",
         workspacePath: "/home/me/project",
@@ -151,78 +133,112 @@ describe("runMonitorTick", () => {
     );
   });
 
-  it("prunes tracking state for pids that disappeared", async () => {
-    const engine = new KillDecisionEngine({
-      fullMb: 2500,
-      partialMb: 800,
-      eslintMb: 1500,
-      minEtimeSeconds: 300,
-    });
-    const prune = vi.spyOn(engine, "prunePids");
-    const runPs = vi
-      .fn()
-      .mockResolvedValueOnce(
-        makePsOutput([
-          { pid: 10, rssKb: 100, etimeSec: 1000 },
-          { pid: 20, rssKb: 100, etimeSec: 1000 },
-        ]),
-      )
-      .mockResolvedValueOnce(
-        makePsOutput([{ pid: 10, rssKb: 100, etimeSec: 1020 }]),
-      );
+  it("does not kill when workspace is active (recent edit)", async () => {
+    let t = 1_000_000_000;
+    const engine = makeEngine(() => t);
+    const killProcess = vi.fn().mockResolvedValue(true);
+    const runPgrep = vi.fn().mockResolvedValue(pgrep([{ pid: 10 }]));
+
     await runMonitorTick({
-      runPs,
+      runPgrep,
       engine,
-      killProcess: vi.fn(),
-      resolveWorkspacePath: async () => undefined,
+      killProcess,
+      resolveWorkspacePath: async () => "/home/me/project",
+      workspaceMtimeAt: () => t - 1000,
       emit: () => {},
     });
+    t += MIN_AGE_MS + 1;
+    const result = await runMonitorTick({
+      runPgrep,
+      engine,
+      killProcess,
+      resolveWorkspacePath: async () => "/home/me/project",
+      workspaceMtimeAt: () => t - 1000, // edit 1s ago
+      emit: () => {},
+    });
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(result.killed).toHaveLength(0);
+  });
+
+  it("does not kill when workspace can't be resolved", async () => {
+    let t = 1_000_000_000;
+    const engine = makeEngine(() => t);
+    const killProcess = vi.fn();
+    const runPgrep = vi.fn().mockResolvedValue(pgrep([{ pid: 10 }]));
+
     await runMonitorTick({
-      runPs,
+      runPgrep,
+      engine,
+      killProcess,
+      resolveWorkspacePath: async () => undefined,
+      workspaceMtimeAt: () => 0,
+      emit: () => {},
+    });
+    t += MIN_AGE_MS + 1;
+    const result = await runMonitorTick({
+      runPgrep,
+      engine,
+      killProcess,
+      resolveWorkspacePath: async () => undefined,
+      workspaceMtimeAt: () => 0,
+      emit: () => {},
+    });
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(result.killed).toHaveLength(0);
+  });
+
+  it("prunes tracking state for pids that disappeared", async () => {
+    let t = 1_000_000_000;
+    const engine = makeEngine(() => t);
+    const prune = vi.spyOn(engine, "prunePids");
+    const runPgrep = vi
+      .fn()
+      .mockResolvedValueOnce(pgrep([{ pid: 10 }, { pid: 20 }]))
+      .mockResolvedValueOnce(pgrep([{ pid: 10 }]));
+    await runMonitorTick({
+      runPgrep,
       engine,
       killProcess: vi.fn(),
       resolveWorkspacePath: async () => undefined,
+      workspaceMtimeAt: () => 0,
+      emit: () => {},
+    });
+    t += 10_000;
+    await runMonitorTick({
+      runPgrep,
+      engine,
+      killProcess: vi.fn(),
+      resolveWorkspacePath: async () => undefined,
+      workspaceMtimeAt: () => 0,
       emit: () => {},
     });
     expect(prune).toHaveBeenLastCalledWith(new Set([10]));
   });
 
   it("schedules a respawn check after a kill with a workspace hash", async () => {
-    const engine = new KillDecisionEngine({
-      fullMb: 2500,
-      partialMb: 800,
-      eslintMb: 1500,
-      minEtimeSeconds: 300,
-    });
-    const runPs = vi
-      .fn()
-      .mockResolvedValue(
-        makePsOutput([
-          { pid: 10, rssKb: 3000 * 1024, etimeSec: 1000, workspace: "abc" },
-        ]),
-      );
+    let t = 1_000_000_000;
+    const engine = makeEngine(() => t);
+    const runPgrep = vi.fn().mockResolvedValue(pgrep([{ pid: 10 }]));
     const schedule = vi.fn();
-    // First tick primes tracking without killing.
+
     await runMonitorTick({
-      runPs,
+      runPgrep,
       engine,
       killProcess: vi.fn().mockResolvedValue(true),
-      resolveWorkspacePath: async () => undefined,
+      resolveWorkspacePath: async () => "/home/me/project",
+      workspaceMtimeAt: () => t - 10 * IDLE_MS,
       emit: () => {},
       scheduleRespawnCheck: schedule,
     });
     expect(schedule).not.toHaveBeenCalled();
-    // Second tick sees confirmed growth and kills.
-    runPs.mockResolvedValueOnce(
-      makePsOutput([
-        { pid: 10, rssKb: 3100 * 1024, etimeSec: 1020, workspace: "abc" },
-      ]),
-    );
+
+    t += MIN_AGE_MS + 1;
     await runMonitorTick({
-      runPs,
+      runPgrep,
       engine,
       killProcess: vi.fn().mockResolvedValue(true),
-      resolveWorkspacePath: async () => undefined,
+      resolveWorkspacePath: async () => "/home/me/project",
+      workspaceMtimeAt: () => t - 10 * IDLE_MS,
       emit: () => {},
       scheduleRespawnCheck: schedule,
     });
@@ -230,38 +246,29 @@ describe("runMonitorTick", () => {
   });
 
   it("does not schedule respawn check when workspace hash is missing", async () => {
-    const engine = new KillDecisionEngine({
-      fullMb: 2500,
-      partialMb: 800,
-      eslintMb: 1500,
-      minEtimeSeconds: 300,
-    });
-    const runPs = vi
+    let t = 1_000_000_000;
+    const engine = makeEngine(() => t);
+    const runPgrep = vi
       .fn()
-      .mockResolvedValue(
-        makePsOutput([
-          { pid: 10, rssKb: 3000 * 1024, etimeSec: 1000, workspace: null },
-        ]),
-      );
+      .mockResolvedValue(pgrep([{ pid: 10, workspace: null }]));
     const schedule = vi.fn();
+
     await runMonitorTick({
-      runPs,
+      runPgrep,
       engine,
       killProcess: vi.fn().mockResolvedValue(true),
-      resolveWorkspacePath: async () => undefined,
+      resolveWorkspacePath: async () => "/home/me/project",
+      workspaceMtimeAt: () => t - 10 * IDLE_MS,
       emit: () => {},
       scheduleRespawnCheck: schedule,
     });
-    runPs.mockResolvedValueOnce(
-      makePsOutput([
-        { pid: 10, rssKb: 3100 * 1024, etimeSec: 1020, workspace: null },
-      ]),
-    );
+    t += MIN_AGE_MS + 1;
     await runMonitorTick({
-      runPs,
+      runPgrep,
       engine,
       killProcess: vi.fn().mockResolvedValue(true),
-      resolveWorkspacePath: async () => undefined,
+      resolveWorkspacePath: async () => "/home/me/project",
+      workspaceMtimeAt: () => t - 10 * IDLE_MS,
       emit: () => {},
       scheduleRespawnCheck: schedule,
     });

@@ -3,7 +3,14 @@
  *
  * Listens on a Unix domain socket and speaks newline-delimited JSON.
  * The server is transport-only; callers supply handlers for hello/bye
- * and data providers for status and logs.
+ * and reap.
+ *
+ * Scope is deliberately narrow (see protocol.ts): hello/bye refcount
+ * the server's lifetime, reap triggers an on-demand tick, stop
+ * triggers a graceful shutdown, ping/pong is a cheap health check.
+ * `killed` events are broadcast to every connected client without
+ * any explicit subscription — the extension uses them to surface UI
+ * toasts, and a client that doesn't care simply ignores them.
  */
 
 import { createServer, type Server, type Socket } from "node:net";
@@ -11,26 +18,30 @@ import { existsSync, unlinkSync } from "node:fs";
 import { errMessage, reportStderr } from "./errors.ts";
 import { createLineFramer } from "./util.ts";
 import { parseProtocolMessage } from "./protocol.ts";
-import type {
-  ClientMessage,
-  ServerMessage,
-  StatusResponse,
-  KilledEvent,
-  ErrorEvent,
-} from "./protocol.ts";
+import type { ClientMessage, ServerMessage, KilledEvent } from "./protocol.ts";
 
 export interface IpcServerHandlers {
   onHello: (pid: number) => void;
   onBye: (pid: number) => void;
-  getStatus: () => Omit<StatusResponse, "type">;
-  getLogs: (tail?: number) => string[];
   onStop?: () => void;
+  /**
+   * Handle an immediate "reap now" request from a client. Must run
+   * the monitoring tick once and return its outcome. The handler can
+   * signal failure two ways — by throwing (which the server catches
+   * and reports) or by returning `{ ok: false, error }` (the shape
+   * that lets main.ts share exactly one error path between the
+   * interval tick and the reap-on-demand path).
+   */
+  onReap?: () => Promise<{
+    ok: boolean;
+    killed: number;
+    error?: string;
+  }>;
 }
 
 interface ConnectionState {
   socket: Socket;
   clientPid?: number;
-  subscribedToEvents: boolean;
 }
 
 export class IpcServer {
@@ -90,17 +101,10 @@ export class IpcServer {
     return pids;
   }
 
-  get eventSubscriberCount(): number {
-    let n = 0;
-    for (const c of this.#connections) if (c.subscribedToEvents) n++;
-    return n;
-  }
-
-  /** Write one JSON-encoded message to every event-subscriber. */
-  #broadcastToSubscribers(msg: ServerMessage): void {
-    const line = JSON.stringify(msg) + "\n";
+  /** Broadcast a `killed` event to every connected client. */
+  broadcastKilled(event: KilledEvent): void {
+    const line = JSON.stringify(event) + "\n";
     for (const conn of this.#connections) {
-      if (!conn.subscribedToEvents) continue;
       try {
         conn.socket.write(line);
       } catch {
@@ -109,20 +113,8 @@ export class IpcServer {
     }
   }
 
-  broadcastEvent(event: KilledEvent | ErrorEvent): void {
-    this.#broadcastToSubscribers(event);
-  }
-
-  /** Push a live log line to all event-subscribers. */
-  broadcastLog(logLine: string): void {
-    this.#broadcastToSubscribers({ type: "log", line: logLine });
-  }
-
   #handleConnection(socket: Socket): void {
-    const state: ConnectionState = {
-      socket,
-      subscribedToEvents: false,
-    };
+    const state: ConnectionState = { socket };
     this.#connections.add(state);
     const framer = createLineFramer();
 
@@ -132,13 +124,10 @@ export class IpcServer {
           const msg = parseProtocolMessage<ClientMessage>(line);
           this.#dispatch(state, msg);
         } catch (err) {
-          // Malformed JSON indicates a protocol mismatch or a misbehaving
-          // client — not an expected condition. Tell the peer and log.
+          // Malformed JSON indicates a protocol mismatch or a
+          // misbehaving client. We don't have a generic error channel
+          // anymore; log it and drop the line.
           reportStderr("ipc parse error", err);
-          this.#send(state, {
-            type: "error",
-            message: `malformed message: ${errMessage(err)}`,
-          });
         }
       }
     });
@@ -156,35 +145,50 @@ export class IpcServer {
       case "hello":
         state.clientPid = msg.pid;
         this.#handlers.onHello(msg.pid);
-        this.#send(state, { type: "ack", of: "hello" });
         break;
       case "bye":
         this.#handlers.onBye(msg.pid);
-        this.#send(state, { type: "ack", of: "bye" });
-        break;
-      case "status": {
-        const s = this.#handlers.getStatus();
-        this.#send(state, { type: "status", ...s });
-        break;
-      }
-      case "logs": {
-        const lines = this.#handlers.getLogs(msg.tail);
-        for (const line of lines) {
-          this.#send(state, { type: "log", line });
-        }
-        break;
-      }
-      case "events":
-        state.subscribedToEvents = true;
-        this.#send(state, { type: "ack", of: "events" });
         break;
       case "ping":
         this.#send(state, { type: "pong" });
         break;
       case "stop":
-        this.#send(state, { type: "ack", of: "stop" });
         if (this.#handlers.onStop) this.#handlers.onStop();
         break;
+      case "reap": {
+        const onReap = this.#handlers.onReap;
+        if (!onReap) {
+          this.#send(state, {
+            type: "reap",
+            ok: false,
+            killed: 0,
+            error: "server does not support reap",
+          });
+          break;
+        }
+        // Fire and forget the async run; send the response when it
+        // settles. `state` may be gone by the time we reply, which
+        // `#send` tolerates.
+        void (async () => {
+          try {
+            const result = await onReap();
+            this.#send(state, {
+              type: "reap",
+              ok: result.ok,
+              killed: result.killed,
+              ...(result.error ? { error: result.error } : {}),
+            });
+          } catch (err) {
+            this.#send(state, {
+              type: "reap",
+              ok: false,
+              killed: 0,
+              error: errMessage(err),
+            });
+          }
+        })();
+        break;
+      }
     }
   }
 

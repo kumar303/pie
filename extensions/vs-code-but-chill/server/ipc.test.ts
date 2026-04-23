@@ -45,10 +45,6 @@ function nextMessage(
   });
 }
 
-/**
- * Build a server-handler stub whose calls can be awaited via the
- * returned promise.  Resolves with the first call's argument.
- */
 function deferredHandler<T>(): {
   handler: (arg: T) => void;
   promise: Promise<T>;
@@ -69,8 +65,6 @@ describe("IpcServer/Client", () => {
     server = new IpcServer(sockPath(), {
       onHello: hello.handler,
       onBye: () => {},
-      getStatus: () => ({ uptimeSec: 1, killed: 0, watching: [] }),
-      getLogs: () => ["line1", "line2"],
     });
     await server.start();
 
@@ -78,51 +72,73 @@ describe("IpcServer/Client", () => {
     clients.push(client);
     await client.connect(sockPath());
     client.send({ type: "hello", pid: 9999 });
+
     await hello.promise;
     expect(server!.clientPids).toContain(9999);
   });
 
-  it("status round-trip", async () => {
+  it("reap invokes the handler and returns its result to the caller", async () => {
+    // `reap` lets a client request an immediate monitoring tick. The
+    // server must run its handler and return a `reap` response so the
+    // client can report success + kill count back to the UI.
+    let invocations = 0;
     server = new IpcServer(sockPath(), {
       onHello: () => {},
       onBye: () => {},
-      getStatus: () => ({
-        uptimeSec: 42,
-        killed: 3,
-        watching: [
-          {
-            pid: 1,
-            rssMb: 100,
-            kind: "tsserver",
-            mode: "full",
-            workspace: "abc",
-            etimeSec: 300,
-          },
-        ],
-      }),
-      getLogs: () => [],
+      onReap: async () => {
+        invocations++;
+        return { killed: 0, ok: true };
+      },
     });
     await server.start();
 
     const client = new IpcClient();
     clients.push(client);
     await client.connect(sockPath());
-    const received: any[] = [];
-    client.onMessage((m) => received.push(m));
-    const statusPromise = nextMessage(client, (m) => m.type === "status");
-    client.send({ type: "status" });
-    const status = await statusPromise;
-    expect(status.uptimeSec).toBe(42);
-    expect(status.killed).toBe(3);
-    expect(status.watching).toHaveLength(1);
+    const reapP = nextMessage(client, (m) => m.type === "reap");
+    client.send({ type: "reap" });
+    const msg = await reapP;
+
+    expect(invocations).toBe(1);
+    expect(msg.ok).toBe(true);
+    expect(msg.killed).toBe(0);
+  });
+
+  it("reap surfaces handler errors as { ok:false, error } whether thrown or returned", async () => {
+    // Two failure shapes we want to surface identically:
+    //   1. handler resolves with `{ ok: false, error }` (the shape
+    //      `safeTick()` uses so reap and the interval tick share
+    //      exactly one error path).
+    //   2. handler throws (legacy contract; still must be handled).
+    for (const shape of ["returned", "thrown"] as const) {
+      if (server) {
+        await server.stop();
+        server = null;
+      }
+      server = new IpcServer(sockPath(), {
+        onHello: () => {},
+        onBye: () => {},
+        onReap: async () => {
+          if (shape === "thrown") throw new Error("boom");
+          return { ok: false, killed: 0, error: "boom" };
+        },
+      });
+      await server.start();
+      const client = new IpcClient();
+      clients.push(client);
+      await client.connect(sockPath());
+      const reapP = nextMessage(client, (m) => m.type === "reap");
+      client.send({ type: "reap" });
+      const msg = await reapP;
+      expect(msg.ok).toBe(false);
+      expect(msg.error).toMatch(/boom/);
+    }
   });
 
   it("ping returns pong", async () => {
     server = new IpcServer(sockPath(), {
       onHello: () => {},
       onBye: () => {},
-      getStatus: () => ({ uptimeSec: 0, killed: 0, watching: [] }),
-      getLogs: () => [],
     });
     await server.start();
     const client = new IpcClient();
@@ -133,12 +149,12 @@ describe("IpcServer/Client", () => {
     await pongPromise;
   });
 
-  it("events subscribers receive broadcast messages", async () => {
+  it("every connected client receives broadcast killed events", async () => {
+    // Killed events are implicit — no opt-in subscription. The
+    // extension is the only consumer and wants to toast every kill.
     server = new IpcServer(sockPath(), {
       onHello: () => {},
       onBye: () => {},
-      getStatus: () => ({ uptimeSec: 0, killed: 0, watching: [] }),
-      getLogs: () => [],
     });
     await server.start();
 
@@ -148,50 +164,16 @@ describe("IpcServer/Client", () => {
     await c1.connect(sockPath());
     await c2.connect(sockPath());
 
-    const ack1 = nextMessage(c1, (m) => m.type === "ack" && m.of === "events");
-    const ack2 = nextMessage(c2, (m) => m.type === "ack" && m.of === "events");
-    c1.send({ type: "events" });
-    c2.send({ type: "events" });
-    await Promise.all([ack1, ack2]);
-
     const killed1 = nextMessage(c1, (m) => m.type === "killed");
     const killed2 = nextMessage(c2, (m) => m.type === "killed");
-    server.broadcastEvent({
+    server.broadcastKilled({
       type: "killed",
       pid: 5,
       kind: "tsserver",
       workspace: "abc",
-      rssMb: 2600,
-      mode: "full",
       reason: "x",
     });
     await Promise.all([killed1, killed2]);
-  });
-
-  it("logs request returns tail of log lines", async () => {
-    const lines = ["a", "b", "c", "d", "e"];
-    server = new IpcServer(sockPath(), {
-      onHello: () => {},
-      onBye: () => {},
-      getStatus: () => ({ uptimeSec: 0, killed: 0, watching: [] }),
-      getLogs: (tail) =>
-        typeof tail === "number" ? lines.slice(-tail) : lines,
-    });
-    await server.start();
-    const client = new IpcClient();
-    clients.push(client);
-    await client.connect(sockPath());
-    const logs: string[] = [];
-    const gotTwo = new Promise<void>((resolve) => {
-      client.onMessage((m) => {
-        if (m.type !== "log") return;
-        logs.push(m.line);
-        if (logs.length >= 2) resolve();
-      });
-    });
-    client.send({ type: "logs", tail: 2 });
-    await gotTwo;
-    expect(logs.slice(-2)).toEqual(["d", "e"]);
   });
 
   it("bye triggers onBye callback", async () => {
@@ -199,8 +181,6 @@ describe("IpcServer/Client", () => {
     server = new IpcServer(sockPath(), {
       onHello: () => {},
       onBye: bye.handler,
-      getStatus: () => ({ uptimeSec: 0, killed: 0, watching: [] }),
-      getLogs: () => [],
     });
     await server.start();
     const client = new IpcClient();
@@ -224,8 +204,6 @@ describe("IpcServer/Client", () => {
           active.delete(pid);
           if (active.size === 0) lastClientLeft = true;
         },
-        getStatus: () => ({ uptimeSec: 0, killed: 0, watching: [] }),
-        getLogs: () => [],
       });
       await server.start();
 
@@ -235,24 +213,36 @@ describe("IpcServer/Client", () => {
       await c1.connect(sockPath());
       await c2.connect(sockPath());
 
-      const ack1 = nextMessage(c1, (m) => m.type === "ack" && m.of === "hello");
-      const ack2 = nextMessage(c2, (m) => m.type === "ack" && m.of === "hello");
       c1.send({ type: "hello", pid: 111 });
       c2.send({ type: "hello", pid: 222 });
-      await Promise.all([ack1, ack2]);
+      // No more `ack` messages; wait briefly for server to process.
+      await new Promise((r) => setTimeout(r, 20));
       expect(active).toEqual(new Set([111, 222]));
 
-      const bye1 = nextMessage(c1, (m) => m.type === "ack" && m.of === "bye");
       c1.send({ type: "bye", pid: 111 });
-      await bye1;
+      await new Promise((r) => setTimeout(r, 20));
       expect(lastClientLeft).toBe(false);
       expect(active).toEqual(new Set([222]));
 
-      const bye2 = nextMessage(c2, (m) => m.type === "ack" && m.of === "bye");
       c2.send({ type: "bye", pid: 222 });
-      await bye2;
+      await new Promise((r) => setTimeout(r, 20));
       expect(lastClientLeft).toBe(true);
       expect(active.size).toBe(0);
     },
   );
+
+  it("stop invokes onStop handler", async () => {
+    const stopped = deferredHandler<void>();
+    server = new IpcServer(sockPath(), {
+      onHello: () => {},
+      onBye: () => {},
+      onStop: () => stopped.handler(undefined),
+    });
+    await server.start();
+    const client = new IpcClient();
+    clients.push(client);
+    await client.connect(sockPath());
+    client.send({ type: "stop" });
+    await stopped.promise;
+  });
 });

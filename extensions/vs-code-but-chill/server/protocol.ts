@@ -2,9 +2,14 @@
  * IPC protocol types for vs-code-but-chill.
  *
  * Newline-delimited JSON over a Unix domain socket.
+ *
+ * Scope is intentionally small: the extension uses IPC to (1) keep
+ * the server alive while any pi session is attached, (2) ask for an
+ * immediate `reap`, (3) ask for a graceful `stop`, and (4) receive
+ * `killed` notifications. Everything observable (logs, status) is
+ * read from the on-disk log file instead of streamed.
  */
 
-export type TsServerMode = "full" | "partialSemantic";
 export type ProcessKind = "tsserver" | "eslint";
 
 // ── Client → server requests ────────────────────────────────────────
@@ -17,85 +22,53 @@ export interface ByeMsg {
   type: "bye";
   pid: number;
 }
-export interface StatusMsg {
-  type: "status";
-}
-export interface LogsMsg {
-  type: "logs";
-  tail?: number;
-}
-export interface EventsMsg {
-  type: "events";
-}
 export interface StopMsg {
   type: "stop";
 }
 export interface PingMsg {
   type: "ping";
 }
-
-export type ClientMessage =
-  | HelloMsg
-  | ByeMsg
-  | StatusMsg
-  | LogsMsg
-  | EventsMsg
-  | StopMsg
-  | PingMsg;
-
-// ── Server → client responses / events ──────────────────────────────
-
-export interface StatusResponse {
-  type: "status";
-  uptimeSec: number;
-  killed: number;
-  watching: Array<{
-    pid: number;
-    rssMb: number;
-    kind: ProcessKind;
-    mode: TsServerMode;
-    workspace: string | null;
-    etimeSec: number;
-  }>;
+/** Ask the server to run its monitoring tick once, immediately. */
+export interface ReapMsg {
+  type: "reap";
 }
 
-export interface LogLineResponse {
-  type: "log";
-  line: string;
-}
+export type ClientMessage = HelloMsg | ByeMsg | StopMsg | PingMsg | ReapMsg;
+
+// ── Server → client messages ─────────────────────────────────────────
 
 export interface PongResponse {
   type: "pong";
 }
 
+/**
+ * Broadcast when the server kills a monitored process. Every
+ * connected client receives every kill — there's no opt-in; the
+ * extension uses it to surface a UI toast.
+ */
 export interface KilledEvent {
   type: "killed";
   pid: number;
   kind: ProcessKind;
   workspace: string | null;
   workspacePath?: string;
-  rssMb: number;
-  mode: TsServerMode;
   reason: string;
 }
 
-export interface ErrorEvent {
-  type: "error";
-  message: string;
+/**
+ * Response to a `reap` request. `ok` indicates whether the tick ran
+ * to completion; `killed` is the number of processes that were
+ * killed during this tick (0 is a valid success case and the
+ * trigger for the "nothing to kill" UI notification).
+ */
+export interface ReapResponse {
+  type: "reap";
+  ok: boolean;
+  killed: number;
+  error?: string;
 }
 
-export interface AckResponse {
-  type: "ack";
-  of: string;
-}
-
-export type ServerMessage =
-  | StatusResponse
-  | LogLineResponse
-  | PongResponse
-  | KilledEvent
-  | ErrorEvent
-  | AckResponse;
+export type ServerMessage = PongResponse | KilledEvent | ReapResponse;
 
 // ── Parsing helpers ───────────────────────────────────────────────────
 
