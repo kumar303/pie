@@ -75,20 +75,6 @@ async function main(dataDir: string): Promise<void> {
     idleMs: config.idleMs,
   });
 
-  // Cache: workspace hash → resolved filesystem path.
-  const workspaceCache = new Map<string, string | undefined>();
-
-  const cachedResolveWorkspacePath = async (proc: {
-    pid: number;
-    workspaceHash: string | null;
-  }): Promise<string | undefined> => {
-    const key = proc.workspaceHash ?? "";
-    if (key && workspaceCache.has(key)) return workspaceCache.get(key);
-    const resolved = await resolveWorkspacePath(proc);
-    if (key) workspaceCache.set(key, resolved);
-    return resolved;
-  };
-
   // Clean stale socket file before binding. If this fails we'll find
   // out immediately when the IPC server fails to bind and we abort.
   if (existsSync(paths.socketPath)) {
@@ -210,7 +196,7 @@ async function main(dataDir: string): Promise<void> {
       runPgrep,
       engine,
       killProcess: (pid) => killWithTimeout(pid),
-      resolveWorkspacePath: cachedResolveWorkspacePath,
+      resolveWorkspacePath,
       workspaceMtimeAt,
       emit: (ev) => {
         ipc.broadcastKilled(ev);

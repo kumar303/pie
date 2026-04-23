@@ -46,9 +46,21 @@ export async function runMonitorTick(
   opts.engine.prunePids(new Set(processes.map((p) => p.pid)));
 
   const killed: number[] = [];
+  // Tick-scoped resolve cache: multiple tsservers for the same
+  // workspace share an ext host and resolve to the same path, so
+  // doing the lsof + log pivot once per workspace per tick is both
+  // correct and a meaningful win. Cleared at the end of the tick.
+  const resolveCache = new Map<string, string | undefined>();
 
   for (const proc of processes) {
-    const workspacePath = await opts.resolveWorkspacePath(proc);
+    const key = proc.workspaceHash;
+    let workspacePath: string | undefined;
+    if (key && resolveCache.has(key)) {
+      workspacePath = resolveCache.get(key);
+    } else {
+      workspacePath = await opts.resolveWorkspacePath(proc);
+      if (key) resolveCache.set(key, workspacePath);
+    }
     // Prefer the process's own activityPath (tsserver's cancellation
     // pipe dir) because lsof can't see tsserver's project files. For
     // eslint and anything else without one, fall back to the resolved
@@ -58,7 +70,7 @@ export async function runMonitorTick(
     const decision = opts.engine.shouldKill(proc, mtime);
     if (!decision.kill) {
       opts.log?.(
-        `skip pid=${proc.pid} kind=${proc.kind} workspace=${workspacePath ?? proc.activityPath ?? "?"}: ${decision.reason}`,
+        `skip pid=${proc.pid} kind=${proc.kind} workspace=${workspacePath ?? proc.workspaceHash ?? "?"}: ${decision.reason}`,
       );
       continue;
     }

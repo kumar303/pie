@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   deepestCommonAncestor,
   parseLsofFnPaths,
+  parseLsofParentPid,
   workspaceMtimeAt,
 } from "./proc-utils.ts";
 
@@ -48,6 +49,21 @@ describe("parseLsofFnPaths", () => {
 
   it("ignores an n-prefix with no path after it", () => {
     expect(parseLsofFnPaths("n\n")).toEqual([]);
+  });
+});
+
+describe("parseLsofParentPid", () => {
+  it("extracts the PPID from an R-prefixed record", () => {
+    const stdout = ["p12345", "R9999", "ftxt", "n/some/file"].join("\n");
+    expect(parseLsofParentPid(stdout)).toBe(9999);
+  });
+
+  it("returns null when no R record is present", () => {
+    expect(parseLsofParentPid("p12345\nftxt\n")).toBeNull();
+  });
+
+  it("returns null for non-numeric R value", () => {
+    expect(parseLsofParentPid("Rabc")).toBeNull();
   });
 });
 

@@ -14,6 +14,29 @@ import { reportStderr } from "./errors.ts";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 
+/**
+ * Render a timestamp in the local timezone as ISO 8601 with offset
+ * (e.g. `2026-04-23T23:05:10.566+01:00`). We avoid `Date.toISOString()`
+ * because that forces UTC (`Z` suffix), which was off by one hour
+ * from the user's wall clock.
+ */
+export function formatLocalTimestamp(d: Date = new Date()): string {
+  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hours = pad(d.getHours());
+  const minutes = pad(d.getMinutes());
+  const seconds = pad(d.getSeconds());
+  const ms = pad(d.getMilliseconds(), 3);
+  // getTimezoneOffset is minutes WEST of UTC, so invert the sign.
+  const offsetMin = -d.getTimezoneOffset();
+  const sign = offsetMin >= 0 ? "+" : "-";
+  const absMin = Math.abs(offsetMin);
+  const tz = `${sign}${pad(Math.floor(absMin / 60))}:${pad(absMin % 60)}`;
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${ms}${tz}`;
+}
+
 interface LogEntry {
   ts: string;
   msg: string;
@@ -79,7 +102,7 @@ export class LogWriter {
 
   write(line: string): void {
     // PLAN.md: "Append JSON lines to server.log."
-    const ts = new Date().toISOString();
+    const ts = formatLocalTimestamp();
     const jsonEntry = JSON.stringify({ ts, msg: line });
     const displayEntry = `[${ts}] ${line}`;
     try {

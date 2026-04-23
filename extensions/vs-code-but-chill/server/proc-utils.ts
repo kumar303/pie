@@ -11,6 +11,8 @@ import { homedir } from "node:os";
 import { isProcessAlive } from "./registry.ts";
 import { errCode } from "./errors.ts";
 import { sleep } from "./util.ts";
+import { resolveTsserverWorkspacePath } from "./vscode-workspace-index.ts";
+import type { ProcessKind } from "./monitor.ts";
 
 const execFileP = promisify(execFile);
 
@@ -104,17 +106,35 @@ export function parseLsofFnPaths(stdout: string): string[] {
   return paths;
 }
 
+/**
+ * Extract the parent pid from `lsof -FR` output. The field is
+ * emitted once per process on a line starting with `R` followed by
+ * the numeric ppid.
+ */
+export function parseLsofParentPid(stdout: string): number | null {
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("R")) continue;
+    const n = Number(line.slice(1));
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 export async function resolveWorkspacePath(proc: {
   pid: number;
+  kind: ProcessKind;
 }): Promise<string | undefined> {
   const home = homedir();
-  // First: inspect open file descriptors
+  // First: inspect open file descriptors. Also grab the ppid (-FR)
+  // for the tsserver fallback below.
+  let ppid: number | null = null;
   try {
     const { stdout } = await execFileP(
       "/usr/sbin/lsof",
-      ["-p", String(proc.pid), "-Fn"],
+      ["-p", String(proc.pid), "-Fn", "-FR"],
       { maxBuffer: 10 * 1024 * 1024 },
     );
+    ppid = parseLsofParentPid(stdout);
     const paths = parseLsofFnPaths(stdout).filter(
       (p) =>
         p.startsWith(home) &&
@@ -128,10 +148,21 @@ export async function resolveWorkspacePath(proc: {
       }
     }
   } catch {
-    // Fall through to cwd lookup
+    // Fall through to cwd / log pivot
   }
 
-  // Fall back to cwd
+  // tsserver never has user project files open via lsof — it reads
+  // them through synchronous fs calls that leave no long-lived fds.
+  // Pivot through VS Code's log files instead: the tsserver's ppid
+  // is its ext-host pid, which is recorded in the window's
+  // renderer.log and maps to a workspaceStorage entry.
+  if (proc.kind === "tsserver" && ppid !== null) {
+    const resolved = resolveTsserverWorkspacePath({ exthostPid: ppid });
+    if (resolved) return resolved;
+  }
+
+  // Last resort: process cwd. eslintServer typically has its cwd set
+  // to the workspace root.
   try {
     const { stdout } = await execFileP(
       "/usr/sbin/lsof",

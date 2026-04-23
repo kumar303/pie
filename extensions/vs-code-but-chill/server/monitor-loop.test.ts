@@ -287,7 +287,47 @@ describe("runMonitorTick", () => {
     expect(mtimeSeen).not.toContain("/Users/me/proj");
   });
 
-  it("logs tsserver's activityPath when the workspace path is unresolved", async () => {
+  it("deduplicates resolveWorkspacePath within a tick", async () => {
+    // Two tsservers sharing an ext host — we expect one resolve call.
+    const engine = makeEngine(() => 1_000_000_000);
+    const runPgrep = vi.fn().mockResolvedValue(
+      pgrep([
+        { pid: 1, workspace: "shared" },
+        { pid: 2, workspace: "shared" },
+      ]),
+    );
+    const resolveWorkspacePath = vi.fn(async () => "/home/me/project");
+    await runMonitorTick({
+      runPgrep,
+      engine,
+      killProcess: vi.fn().mockResolvedValue(true),
+      resolveWorkspacePath,
+      workspaceMtimeAt: () => 1_000_000_000 - 1000,
+      emit: () => {},
+    });
+    expect(resolveWorkspacePath).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache across ticks", async () => {
+    const engine = makeEngine(() => 1_000_000_000);
+    const runPgrep = vi
+      .fn()
+      .mockResolvedValue(pgrep([{ pid: 1, workspace: "shared" }]));
+    const resolveWorkspacePath = vi.fn(async () => "/home/me/project");
+    const common = {
+      runPgrep,
+      engine,
+      killProcess: vi.fn().mockResolvedValue(true),
+      resolveWorkspacePath,
+      workspaceMtimeAt: () => 1_000_000_000 - 1000,
+      emit: () => {},
+    };
+    await runMonitorTick(common);
+    await runMonitorTick(common);
+    expect(resolveWorkspacePath).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not log the pipe dir as a workspace path", async () => {
     const engine = makeEngine(() => 1_000_000_000);
     const runPgrep = vi
       .fn()
@@ -304,8 +344,13 @@ describe("runMonitorTick", () => {
       emit: () => {},
       log: (m) => logs.push(m),
     });
-    expect(logs.some((l) => l.includes("abc"))).toBe(true);
-    expect(logs.every((l) => !l.includes("workspace=?"))).toBe(true);
+    // The cancellation pipe dir is NOT a workspace — it must not be
+    // reported as one. The workspace hash is acceptable as a stable
+    // opaque identifier.
+    expect(logs.every((l) => !l.includes("/tmp/vscode-typescript501"))).toBe(
+      true,
+    );
+    expect(logs.some((l) => l.includes("xyz"))).toBe(true);
   });
 
   it("uses eslint's resolved workspace path for the idleness mtime", async () => {
