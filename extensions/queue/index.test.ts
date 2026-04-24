@@ -528,6 +528,22 @@ describe("buildEditContextLines", () => {
     expect(before[0]).toMatch(/^ {2}\d+\./);
     expect(after[0]).toMatch(/^ {2}\d+\./);
   });
+
+  it("returns lines no wider than the given width", () => {
+    // The render path prepends a 1-char padding and passes width-1,
+    // so the helper must strictly honour the width it was given.
+    const width = 74;
+    const line74 = "a".repeat(20) + " " + "b".repeat(20) + " " + "c".repeat(32);
+    expect(line74.length).toBe(74);
+    const longText = line74 + " " + line74;
+    const prompts = Array.from({ length: 17 }, (_, i) =>
+      i === 0 ? longText : `prompt-${i}`,
+    );
+    const { before, after } = buildEditContextLines(prompts, 5, width);
+    for (const line of [...before, ...after]) {
+      expect(line.length).toBeLessThanOrEqual(width);
+    }
+  });
 });
 
 // ── startQueue ─────────────────────────────────────────────────────

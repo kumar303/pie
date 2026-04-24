@@ -642,12 +642,12 @@ function createListView(
           theme.bold(theme.fg("accent", " " + headerText)),
           "",
         ];
+        const listPadding = " "; // match the Text component's paddingX=1
         const { before, after } = buildEditContextLines(
           state.prompts,
           state.editingIndex,
-          w,
+          Math.max(1, w - listPadding.length),
         );
-        const listPadding = " "; // match the Text component's paddingX=1
         const dimBefore = before.map((l: string) =>
           theme.fg("dim", listPadding + l),
         );
