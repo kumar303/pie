@@ -79,6 +79,93 @@ Logs and other ephemeral files are written to `~/.cache/vs-code-but-chill_pi/`.
 macOS only. Relies on `/usr/bin/pgrep`, `/usr/sbin/lsof`, and POSIX
 signals — all unprivileged.
 
+## Alternatives
+
+### TS/ESLint Restarter
+
+- [Marketplace](https://marketplace.visualstudio.com/items?itemName=kokororin.ts-eslint-restarter&ssr=false#overview)
+- [Source](https://github.com/kokororin/vscode-ts-eslint-restarter)
+
+**Verdict: not a reliable replacement.** Despite the name, its automatic
+memory-based restart only covers the ESLint server — the TypeScript server is
+only restartable manually via a Quick Pick. It also polls every 30 seconds,
+has no cooldown / circuit breaker, and only reads RSS for a single pid (so
+worker-child memory is invisible).
+
+<details>
+<summary>Only ESLint is auto-monitored.</summary>
+
+`checkEslintServer()` searches for `dbaeumer.vscode-eslint` in process
+command lines and restarts only that server. There is no equivalent watcher
+for `tsserver.js`, which is usually the worse memory offender in large TS
+monorepos.
+
+</details>
+
+<details>
+<summary>Aggressive 30s cron.</summary>
+
+Uses `*/30 * * * * *`, and each tick runs `getProcesses()` (full system `ps`
+enumeration), `pidtree()` over the extension host, and `pidusage()`. Compare
+to `vs-code-but-chill`'s 20-minute tick.
+
+</details>
+
+<details>
+<summary>No circuit breaker.</summary>
+
+After `SIGKILL`, the next tick is 30s away; a server that climbs quickly
+(e.g. initial indexing on a big repo) can be killed repeatedly with no
+per-workspace rate limit.
+
+</details>
+
+<details>
+<summary>Hard SIGKILL with no grace.</summary>
+
+No `SIGTERM` first, no grace period — in-flight requests and cached state
+are dropped instantly.
+
+</details>
+
+<details>
+<summary>Memory undercounts child workers.</summary>
+
+`pidusage(eslintPid)` reports RSS for one pid only; any worker children the
+eslint server spawns are not summed, so a process tree over the threshold
+can read as under it.
+
+</details>
+
+<details>
+<summary>Single-eslint assumption.</summary>
+
+`processes.find(...)` returns only the first match; multi-root or
+multi-eslint setups are not fully handled.
+
+</details>
+
+<details>
+<summary>Silent detection misses.</summary>
+
+Relies on a substring match of the extension id in the command line with no
+fallback (e.g. `eslintServer.js` filename). If spawn paths change or a
+pre-release build is used, monitoring silently no-ops.
+
+</details>
+
+<details>
+<summary>Heavier deps.</summary>
+
+Pulls in `cron`, `luxon`, `pidtree`, `pidusage`, `getprocesses`, `winston`,
+and `winston-transport-vscode` for what is essentially a `setInterval` + a
+`ps` read.
+
+</details>
+
+Good as a manual restart button with a safety net for ESLint. Not sufficient
+if you want automatic memory reclamation across both language servers.
+
 ## License
 
 [WTFPL](../../LICENSE)
