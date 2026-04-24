@@ -36,6 +36,16 @@ export interface UpdatePrDeps {
   mkdtemp(prefix: string): Promise<string>;
   writeFile(path: string, data: string): Promise<void>;
   readFile(path: string): Promise<string>;
+  /**
+   * Show an editable prompt to the user. Resolves to the edited text on
+   * submit, or `undefined` if the user aborts. The implementation should
+   * place the cursor at the top of the prefilled content (not the end).
+   */
+  editPrompt(
+    ctx: { ui: MockUi },
+    title: string,
+    prefill: string,
+  ): Promise<string | undefined>;
 }
 
 export interface MockUi {
@@ -126,7 +136,121 @@ function defaultDeps(): UpdatePrDeps {
     mkdtemp: (prefix) => mkdtemp(join(tmpdir(), prefix)),
     writeFile: (p, d) => writeFile(p, d, "utf8"),
     readFile: (p) => readFile(p, "utf8"),
+    editPrompt: defaultEditPrompt,
   };
+}
+
+/**
+ * Default prompt editor: uses `ExtensionEditorComponent` via `ui.custom`
+ * so we can move the cursor to the top of the prefilled text before the
+ * editor is shown. (`ui.editor()` puts the cursor at the end, which
+ * causes the view to scroll to the bottom on long prompts.)
+ */
+async function defaultEditPrompt(
+  ctx: { ui: MockUi },
+  title: string,
+  prefill: string,
+): Promise<string | undefined> {
+  // Load pi-coding-agent lazily so tests and non-TUI contexts don't hard-
+  // depend on it. Any failure falls back to the simple ui.editor() dialog.
+  let ExtensionEditorComponent: new (
+    tui: unknown,
+    keybindings: unknown,
+    title: string,
+    prefill: string | undefined,
+    onSubmit: (value: string) => void,
+    onCancel: () => void,
+  ) => unknown;
+  try {
+    const mod = (await import("@mariozechner/pi-coding-agent")) as unknown as {
+      ExtensionEditorComponent: typeof ExtensionEditorComponent;
+    };
+    ExtensionEditorComponent = mod.ExtensionEditorComponent;
+    if (!ExtensionEditorComponent) throw new Error("missing export");
+  } catch (err) {
+    ctx.ui.notify(
+      `Could not load ExtensionEditorComponent (${
+        err instanceof Error ? err.message : String(err)
+      }); falling back to default editor dialog.`,
+      "warning",
+    );
+    const ui = ctx.ui as MockUi & {
+      editor?: (title: string, prefill?: string) => Promise<string | undefined>;
+    };
+    if (typeof ui.editor !== "function") return undefined;
+    return ui.editor(title, prefill);
+  }
+
+  return ctx.ui.custom<string | undefined>(
+    (
+      tui: unknown,
+      _theme: unknown,
+      keybindings: unknown,
+      done: (v: string | undefined) => void,
+    ) => {
+      const component = new ExtensionEditorComponent(
+        tui,
+        keybindings,
+        title,
+        prefill,
+        (value) => done(value),
+        () => done(undefined),
+      ) as {
+        editor?: {
+          state?: {
+            cursorLine?: number;
+            cursorCol?: number;
+          };
+          scrollOffset?: number;
+        };
+      };
+      // Move cursor to top of prefilled content so the editor scrolls
+      // to the top instead of the bottom. We reach into the private
+      // `editor` field because the underlying Editor exposes no public
+      // API to move the cursor. This is fragile (breaks if pi-tui
+      // renames the internals) but it is the only option today.
+      const inner = component.editor;
+      if (inner?.state) {
+        inner.state.cursorLine = 0;
+        inner.state.cursorCol = 0;
+        inner.scrollOffset = 0;
+      }
+      return component as unknown as {
+        render: (w: number) => string[];
+        invalidate: () => void;
+        handleInput: (data: string) => void;
+      };
+    },
+  );
+}
+
+/**
+ * Parse the output of `gh pr view --json body,url`.
+ *
+ * For backward compatibility we also accept a raw body string (the
+ * previous format, produced by `--jq .body`). In that case the URL is
+ * undefined.
+ */
+export function parseGhPrView(stdout: string): {
+  body: string;
+  url: string | undefined;
+} {
+  const trimmed = stdout.trimStart();
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed) as {
+        body?: unknown;
+        url?: unknown;
+      };
+      return {
+        body: typeof parsed.body === "string" ? parsed.body : "",
+        url: typeof parsed.url === "string" ? parsed.url : undefined,
+      };
+    } catch {
+      // Fall through to treat as raw body.
+    }
+  }
+  return { body: stdout, url: undefined };
 }
 
 function shellEscape(s: string): string {
@@ -150,7 +274,7 @@ export function createExtension(
 
   pi.registerCommand("update-pr-description", {
     description:
-      "Fetch a GitHub PR description and ask the agent to update it for the latest changes (use `copy` to re-copy the last accepted version)",
+      "Automatically update a GitHub PR description; preview and approve all changes",
     getArgumentCompletions: (prefix: string) =>
       SUBCOMMANDS.filter((c) => c.startsWith(prefix)).map((c) => ({
         value: c,
@@ -171,7 +295,7 @@ export function createExtension(
       // Discover the PR for the current branch via gh.
       const ghResult = await deps.exec(
         "gh",
-        ["pr", "view", "--json", "body", "--jq", ".body"],
+        ["pr", "view", "--json", "body,url"],
         { cwd: ctx.cwd },
       );
       if (ghResult.exitCode !== 0) {
@@ -180,7 +304,7 @@ export function createExtension(
         ctx.ui.notify(`Failed to fetch PR: ${msg}`, "error");
         return;
       }
-      const originalBody = ghResult.stdout;
+      const { body: originalBody, url: prUrl } = parseGhPrView(ghResult.stdout);
 
       // Create temp workdir and stash files.
       const tmpDir = await deps.mkdtemp("pi-update-pr-");
@@ -196,11 +320,24 @@ export function createExtension(
       };
 
       ctx.ui.notify(
-        `Fetched PR description (${originalBody.length} chars). Asking agent to update…`,
+        `Fetched PR description (${originalBody.length} chars). Review the prompt before sending…`,
         "info",
       );
 
-      pi.sendUserMessage(buildUpdatePrompt(originalBody));
+      const title = prUrl
+        ? `Tell the agent how to update your PR description \u2022 ${prUrl}`
+        : "Tell the agent how to update your PR description";
+      const edited = await deps.editPrompt(
+        ctx,
+        title,
+        buildUpdatePrompt(originalBody),
+      );
+      if (edited === undefined) {
+        ctx.ui.notify("Aborted: no prompt sent.", "info");
+        return;
+      }
+
+      pi.sendUserMessage(edited);
     },
   });
 

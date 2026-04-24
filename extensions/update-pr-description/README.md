@@ -21,7 +21,40 @@ Pi extension that provides `/update-pr-description`.
 - [`delta`](https://github.com/dandavison/delta) on your `PATH`
 - `pbcopy` (macOS; adapt for other platforms as needed)
 
+## Example
+
+Run a slash command to prompt the agent. Afterwards, you can view a diff of the agent's changes and get the result on your clipboard with `pbcopy`.
+
+```
+/update-pr-description
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ Tell the agent how to update your PR description • https://github.com/example/repo/pull/1234
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Update the GitHub PR description below to reflect the latest changes on this branch.
+Be careful with your edit.
+Only change existing content if it's inaccurate or out of date.
+Wrap any newly added content in <details> tags.
+
+When your rewrite is ready, submit it by calling the `update_pr_description` tool with the complete new markdown in the `new_content` argument. Do not print the markdown in chat, do not write it to any other file, and do not use a different
+tool to update the PR.
+
+The existing PR description to edit is delimited by the markers below. Everything between the markers — and only that content — is editable.
+
+----- BEGIN PR DESCRIPTION -----
+
+[original description would be here]
+
+─── ↓ 228 more ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ enter submit  shift+enter newline  escape/ctrl+c cancel  ctrl+g external editor
+```
+
 ## Local development
+
+Because of tool conflicts, you have to first run `/pie-kumar303-config` to disable `update-pr-description`, and then run the local version:
 
 ```
 pi -e ./extensions/update-pr-description/

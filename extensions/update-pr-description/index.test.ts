@@ -128,6 +128,9 @@ function makeMockDeps(): UpdatePrDeps & {
       args: string[],
     ) => { stdout: string; stderr?: string; exitCode?: number } | undefined
   >;
+  editPromptCalls: Array<{ title: string; prefill: string }>;
+  editPromptResult: string | undefined;
+  editPromptTransform?: (prefill: string) => string | undefined;
 } {
   const files = new Map<string, string>();
   const execCalls: Array<{ cmd: string; args: string[]; input?: string }> = [];
@@ -137,12 +140,27 @@ function makeMockDeps(): UpdatePrDeps & {
       args: string[],
     ) => { stdout: string; stderr?: string; exitCode?: number } | undefined
   > = [];
+  const editPromptCalls: Array<{ title: string; prefill: string }> = [];
 
   let tmpCounter = 0;
   const deps = {
     files,
     execCalls,
     execResponders,
+    editPromptCalls,
+    editPromptResult: undefined as string | undefined,
+    editPromptTransform: undefined as
+      | ((prefill: string) => string | undefined)
+      | undefined,
+    async editPrompt(
+      _ctx: unknown,
+      title: string,
+      prefill: string,
+    ): Promise<string | undefined> {
+      editPromptCalls.push({ title, prefill });
+      if (deps.editPromptTransform) return deps.editPromptTransform(prefill);
+      return deps.editPromptResult;
+    },
     async exec(
       cmd: string,
       args: string[],
@@ -176,6 +194,9 @@ function makeMockDeps(): UpdatePrDeps & {
     files: Map<string, string>;
     execCalls: Array<{ cmd: string; args: string[]; input?: string }>;
     execResponders: typeof execResponders;
+    editPromptCalls: typeof editPromptCalls;
+    editPromptResult: string | undefined;
+    editPromptTransform?: (prefill: string) => string | undefined;
   };
 
   return deps;
@@ -282,12 +303,49 @@ describe("command handler", () => {
     }
   });
 
-  it("sends the update prompt to the agent including the original body", async () => {
+  it("opens an editor prefilled with the update prompt before sending", async () => {
     respondBody("## Original body line");
+    deps.editPromptTransform = (prefill) => prefill;
+    await runCmd();
+    expect(deps.editPromptCalls).toHaveLength(1);
+    expect(deps.editPromptCalls[0]!.prefill).toContain("## Original body line");
+    expect(deps.editPromptCalls[0]!.prefill.toLowerCase()).toContain("careful");
+  });
+
+  it("uses a title with the PR URL as a bullet suffix", async () => {
+    deps.execResponders.push((cmd, args) => {
+      if (cmd === "gh" && args[0] === "pr" && args[1] === "view") {
+        return {
+          stdout: JSON.stringify({
+            body: "body",
+            url: "https://github.com/owner/repo/pull/42",
+          }),
+        };
+      }
+      return undefined;
+    });
+    deps.editPromptTransform = (prefill) => prefill;
+    await runCmd();
+    expect(deps.editPromptCalls[0]!.title).toBe(
+      "Tell the agent how to update your PR description \u2022 https://github.com/owner/repo/pull/42",
+    );
+  });
+
+  it("sends the edited prompt to the agent when the user confirms the editor", async () => {
+    respondBody("## Original body line");
+    deps.editPromptTransform = (prefill) =>
+      prefill + "\n\nEXTRA USER INSTRUCTION";
     await runCmd();
     expect(pi.sent).toHaveLength(1);
     expect(pi.sent[0]!.content).toContain("## Original body line");
-    expect(pi.sent[0]!.content.toLowerCase()).toContain("careful");
+    expect(pi.sent[0]!.content).toContain("EXTRA USER INSTRUCTION");
+  });
+
+  it("aborts without sending a prompt when the user escapes the editor", async () => {
+    respondBody("## Original body line");
+    deps.editPromptResult = undefined; // escape
+    await runCmd();
+    expect(pi.sent).toHaveLength(0);
   });
 
   it("notifies error and does not send prompt if gh fails", async () => {
@@ -358,6 +416,7 @@ describe("update_pr_description tool", () => {
       }
       return undefined;
     });
+    deps.editPromptTransform = (prefill) => prefill; // auto-accept editor with prefill
     const cmd = pi.commands[0]!;
     await cmd.config.handler("", {
       ui,
