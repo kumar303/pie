@@ -92,7 +92,7 @@ export default function (pi: ExtensionAPI) {
         // A socket close during our own teardown isn't a failure.
         if (shuttingDown) return;
         notify?.(
-          `vs-code-but-chill: server connection lost: ${err.message}`,
+          `/vs-code-but-chill: server connection lost: ${err.message}`,
           "warning",
         );
       });
@@ -116,7 +116,7 @@ export default function (pi: ExtensionAPI) {
       return true;
     } catch (err) {
       notify?.(
-        `vs-code-but-chill: could not start server: ${errMessage(err)}`,
+        `/vs-code-but-chill: could not start server: ${errMessage(err)}`,
         "error",
       );
       return false;
@@ -212,7 +212,7 @@ export default function (pi: ExtensionAPI) {
           await connectInFlight;
         }
         if (!client) {
-          ctx.ui.notify("vs-code-but-chill: server is not running", "warning");
+          ctx.ui.notify("/vs-code-but-chill: server is not running", "warning");
           return;
         }
         // Don't await the response: pi serializes handlers and a tick
@@ -230,7 +230,7 @@ export default function (pi: ExtensionAPI) {
           clearTimeout(timer);
           if (!result.ok) {
             ctx.ui.notify(
-              `vs-code-but-chill: reap failed${
+              `/vs-code-but-chill: reap failed${
                 result.error ? ": " + result.error : ""
               }`,
               "warning",
@@ -239,12 +239,12 @@ export default function (pi: ExtensionAPI) {
           }
           if (result.killed === 0) {
             ctx.ui.notify(
-              "vs-code-but-chill: reap ran — nothing to kill",
+              "/vs-code-but-chill: reap ran — nothing to kill",
               "info",
             );
           } else {
             ctx.ui.notify(
-              `vs-code-but-chill: reap killed ${result.killed} process${
+              `/vs-code-but-chill: reap killed ${result.killed} process${
                 result.killed === 1 ? "" : "es"
               }`,
               "info",
@@ -258,7 +258,7 @@ export default function (pi: ExtensionAPI) {
           const i = pendingReaps.indexOf(resolver);
           if (i >= 0) pendingReaps.splice(i, 1);
           ctx.ui.notify(
-            `vs-code-but-chill: reap timed out after ${Math.round(
+            `/vs-code-but-chill: reap timed out after ${Math.round(
               timeoutMs / 1000,
             )}s — no response from server`,
             "warning",
@@ -266,7 +266,7 @@ export default function (pi: ExtensionAPI) {
         }, timeoutMs);
         pendingReaps.push(resolver);
         client.send({ type: "reap" });
-        ctx.ui.notify("vs-code-but-chill: reap requested…", "info");
+        ctx.ui.notify("/vs-code-but-chill: reap requested…", "info");
         return;
       }
       if (sub === "start") {
@@ -279,7 +279,7 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.setStatus(STATUS_KEY, STATUS_TEXT);
             clearStatus = () => ctx.ui.setStatus(STATUS_KEY, undefined);
             ctx.ui.notify(
-              "vs-code-but-chill: start sent; monitor running",
+              "/vs-code-but-chill: start sent; monitor running",
               "info",
             );
           }
@@ -292,12 +292,12 @@ export default function (pi: ExtensionAPI) {
           await connectInFlight;
         }
         if (!client) {
-          ctx.ui.notify("vs-code-but-chill: server is not running", "warning");
+          ctx.ui.notify("/vs-code-but-chill: server is not running", "warning");
           return;
         }
         client.send({ type: "stop" });
         ctx.ui.notify(
-          "vs-code-but-chill: stop sent; server will shut down",
+          "/vs-code-but-chill: stop sent; server will shut down",
           "info",
         );
         // No `bye` — /stop already asked the server to exit. Teardown
@@ -306,7 +306,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       ctx.ui.notify(
-        `vs-code-but-chill: unknown subcommand '${sub}'. Try '/vs-code-but-chill help'.`,
+        `/vs-code-but-chill: unknown subcommand '${sub}'. Try '/vs-code-but-chill help'.`,
         "warning",
       );
     },
