@@ -246,3 +246,77 @@ describe("IpcServer/Client", () => {
     await stopped.promise;
   });
 });
+
+describe("IpcServer client liveness", () => {
+  it("calls onBye when a connected client's socket closes without a graceful bye", async () => {
+    // Reproduces a hard-killed pi: the IpcClient closes its socket
+    // without ever sending {type:"bye"}. Without this signal, the
+    // server keeps registry.clientCount stuck above zero forever and
+    // can't auto-shut-down, leaking memory until the host reboots.
+    //
+    // Contract: IpcServer treats connection close as an implicit bye
+    // for whichever pid that connection had registered via hello.
+    const hello = deferredHandler<number>();
+    const bye = deferredHandler<number>();
+    server = new IpcServer(sockPath(), {
+      onHello: hello.handler,
+      onBye: bye.handler,
+    });
+    await server.start();
+
+    const client = new IpcClient();
+    clients.push(client);
+    await client.connect(sockPath());
+    client.send({ type: "hello", pid: 4242 });
+    expect(await hello.promise).toBe(4242);
+
+    client.disconnect();
+    expect(await bye.promise).toBe(4242);
+  });
+
+  it("does not call onBye when a connection closes before hello", async () => {
+    // A peer that never identifies itself has no pid to bye. We
+    // shouldn't synthesise a fake one — the registry only tracks
+    // clients that handshook.
+    let byes = 0;
+    server = new IpcServer(sockPath(), {
+      onHello: () => {},
+      onBye: () => {
+        byes++;
+      },
+    });
+    await server.start();
+
+    const client = new IpcClient();
+    clients.push(client);
+    await client.connect(sockPath());
+    client.disconnect();
+    // Give the server's close handler a moment to run.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(byes).toBe(0);
+  });
+
+  it("only calls onBye once even if both close and error fire", async () => {
+    // node's Socket emits 'close' after 'error' in some failure
+    // modes. We must be idempotent so the registry refcount doesn't
+    // go negative.
+    const byes: number[] = [];
+    server = new IpcServer(sockPath(), {
+      onHello: () => {},
+      onBye: (pid) => {
+        byes.push(pid);
+      },
+    });
+    await server.start();
+
+    const client = new IpcClient();
+    clients.push(client);
+    await client.connect(sockPath());
+    client.send({ type: "hello", pid: 9999 });
+    // Wait for hello to register before closing.
+    await new Promise((r) => setTimeout(r, 30));
+    client.disconnect();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(byes).toEqual([9999]);
+  });
+});

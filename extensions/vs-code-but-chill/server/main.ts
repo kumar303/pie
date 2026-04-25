@@ -22,6 +22,7 @@ import {
   killWithTimeout,
   resolveWorkspacePath,
   workspaceMtimeAt,
+  sweepOrphanServers,
 } from "./proc-utils.ts";
 
 interface Config {
@@ -64,6 +65,12 @@ async function main(dataDir: string): Promise<void> {
   log.write(
     `to stop manually: kill ${process.pid}    (or: pkill -P ${process.pid}; kill ${process.pid})`,
   );
+
+  // Sweep any sibling vs-code-but-chill servers running in *other*
+  // dataDirs (orphans from previous `pi -e` sessions, stale launchd
+  // jobs, manual debugging). Doing this *before* binding the socket
+  // means new clients always reach this server, not a zombie.
+  await sweepOrphanServers({ dataDir, log });
 
   const config = readConfig();
   log.write(

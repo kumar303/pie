@@ -70,6 +70,22 @@ needing privileged syscalls.
 | `VSCBC_MIN_AGE_MS` | `300000` (5 min)   | Minimum time since first-seen before kill |
 | `VSCBC_IDLE_MS`    | `3600000` (60 min) | Workspace idle threshold (ms since mtime) |
 
+## Single-server guarantee
+
+Only one `vs-code-but-chill` server is supposed to be running per
+data directory. Two guards enforce it:
+
+1. The pid file is acquired with `O_EXCL` so concurrent acquirers
+   can't both "win" (see `Registry.tryAcquirePid`).
+2. The server hard-kills any sibling `vs-code-but-chill` servers
+   running in _other_ dataDirs at startup, before binding its
+   socket. This catches historical orphans (e.g. left over from a
+   graceless shutdown) without polling on every tick.
+
+If you ever need to kill everything by hand:
+
+    pkill -f 'vs-code-but-chill/server/main\.ts'
+
 ## Files
 
 Logs and other ephemeral files are written to `~/.cache/vs-code-but-chill_pi/`.

@@ -3,7 +3,7 @@
  * child process.
  */
 
-import { spawn } from "node:child_process";
+import { spawn as defaultSpawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -102,19 +102,39 @@ function defaultAnchorPackages(): string[] {
 }
 
 /**
+ * Minimal subset of `child_process.spawn`'s contract that
+ * `spawnServer` actually uses. Tests inject a fake instead of
+ * forking a real process.
+ */
+export type SpawnFn = (
+  command: string,
+  args: readonly string[],
+  options: {
+    detached?: boolean;
+    stdio?: "ignore";
+    env?: NodeJS.ProcessEnv;
+  },
+) => { pid: number | undefined; unref: () => void };
+
+export interface SpawnServerOptions {
+  jitiPath?: string;
+  env?: NodeJS.ProcessEnv;
+  logPath?: string;
+  /** Injection point for tests — defaults to `child_process.spawn`. */
+  spawn?: SpawnFn;
+}
+
+/**
  * Spawn the server detached. Returns the child's pid (or undefined
  * if spawn failed silently).
  */
 export function spawnServer(
   serverMainPath: string,
   dataDir: string,
-  options?: {
-    jitiPath?: string;
-    env?: NodeJS.ProcessEnv;
-    logPath?: string;
-  },
+  options?: SpawnServerOptions,
 ): SpawnResult {
   const jitiPath = options?.jitiPath ?? resolveJitiCli();
+  const spawn = options?.spawn ?? defaultSpawn;
   const child = spawn(process.execPath, [jitiPath, serverMainPath, dataDir], {
     detached: true,
     stdio: "ignore",

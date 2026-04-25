@@ -8,12 +8,15 @@
 
 import { errCode, reportStderr } from "./errors.ts";
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { join } from "node:path";
 
@@ -110,22 +113,73 @@ export class Registry {
     return this.paths.clientsFile;
   }
 
-  /** Try to become the owning server by writing our pid. */
-  tryAcquirePid(): boolean {
+  /**
+   * Try to become the owning server by writing our pid.
+   *
+   * Uses an exclusive create (`O_EXCL | O_CREAT`) so concurrent
+   * acquirers can't both "win" through the historical read-then-write
+   * race. If the file already exists with a *dead* pid, we replace it
+   * (unlink + retry the exclusive create); if it exists with a live
+   * pid, we lose.
+   *
+   * `opts.onAfterLivenessCheck` is a test injection point that fires
+   * after the liveness probe but *before* the exclusive write — it
+   * lets tests simulate a competitor materialising the file in the
+   * race window. Production callers leave it unset.
+   */
+  tryAcquirePid(opts?: { onAfterLivenessCheck?: () => void }): boolean {
+    // First: see what's already there. If a live pid owns the file
+    // we lose immediately; if it's stale or unreadable we'll try to
+    // replace it below.
     const result = readPidFile(this.paths.pidFile);
-    if (result.pid !== null) {
-      if (isProcessAlive(result.pid)) return false;
-    } else if (result.reason === "pid file unreadable") {
+    if (result.pid !== null && isProcessAlive(result.pid)) {
+      return false;
+    }
+    if (result.reason === "pid file unreadable") {
       // Corrupt/truncated pid file — expected after a crash.
-      // Surface it so it's visible in manual debugging; we still
-      // overwrite with our pid below.
+      // Surface it so it's visible in manual debugging.
       reportStderr(
         "pid file unreadable, overwriting",
         new Error(result.reason),
       );
     }
-    this.writePid();
-    return true;
+
+    opts?.onAfterLivenessCheck?.();
+
+    // Two attempts: one assuming the file is gone, and one after we
+    // unlink a stale file. A second EEXIST after unlinking means a
+    // competitor genuinely beat us to the create — give up cleanly.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const fd = openSync(this.paths.pidFile, "wx");
+        try {
+          writeSync(fd, String(process.pid));
+        } finally {
+          closeSync(fd);
+        }
+        return true;
+      } catch (err) {
+        if (errCode(err) !== "EEXIST") throw err;
+        // Race: someone created it between our check and the open.
+        // Re-check liveness; if alive, we lose. If dead, unlink and
+        // retry exactly once.
+        const after = readPidFile(this.paths.pidFile);
+        if (after.pid !== null && isProcessAlive(after.pid)) {
+          return false;
+        }
+        try {
+          unlinkSync(this.paths.pidFile);
+        } catch (unlinkErr) {
+          // Either it was unlinked beneath us (ENOENT) or we lost the
+          // permissions race. The next attempt will surface the real
+          // failure mode.
+          if (errCode(unlinkErr) !== "ENOENT") {
+            reportStderr("could not unlink stale pid file", unlinkErr);
+          }
+        }
+      }
+    }
+    return false;
   }
 
   writePid(): void {

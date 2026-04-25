@@ -10,9 +10,25 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+// Stub spawnServer so tests that reach ensureServer's spawn
+// fallback don't fork real detached children that survive the
+// test process as orphans.
+vi.mock("./spawn.ts", () => ({
+  spawnServer: vi.fn(() => ({ pid: undefined })),
+  resolveJitiCli: vi.fn(() => "/dev/null/jiti.mjs"),
+}));
+
 import extensionFactory from "./index.ts";
 import { IpcServer } from "./server/ipc.ts";
 import { pathsFor } from "./server/registry.ts";
+import * as spawnModule from "./spawn.ts";
+
+describe("test-suite hygiene", () => {
+  it("stubs spawnServer so tests can't leak orphan child processes", () => {
+    expect(vi.isMockFunction(spawnModule.spawnServer)).toBe(true);
+  });
+});
 
 // ── mockPi ─────────────────────────────────────────────────────────
 

@@ -119,6 +119,61 @@ describe("Registry.writePid / tryAcquirePid", () => {
     expect(reg.tryAcquirePid()).toBe(true);
   });
 
+  it("tryAcquirePid uses an exclusive create — no read-then-write race", () => {
+    // Direct check of the underlying mechanism: tryAcquirePid must
+    // never overwrite an existing pid file blindly. If a stale pid
+    // file is present with a *live* pid (even ours, faked), we lose;
+    // if the file exists with a dead pid, we win and our pid lands.
+    //
+    // We exercise this by writing a pid file with our own pid (which
+    // is alive) and asserting tryAcquirePid returns false AND leaves
+    // the existing pid intact — i.e. no overwrite happened.
+    writeFileSync(pathsFor(dir).pidFile, String(process.pid));
+    const reg = new Registry(dir);
+    expect(reg.tryAcquirePid()).toBe(false);
+    const after = readFileSync(pathsFor(dir).pidFile, "utf-8").trim();
+    expect(Number(after)).toBe(process.pid);
+  });
+
+  it("tryAcquirePid replaces a stale pid file atomically when winning", () => {
+    // Stale (dead pid) file should be replaced by ours, not
+    // duplicated. After acquire there must be exactly one pid file
+    // and no leftover .tmp.
+    writeFileSync(pathsFor(dir).pidFile, "999999999");
+    const reg = new Registry(dir);
+    expect(reg.tryAcquirePid()).toBe(true);
+    const content = readFileSync(pathsFor(dir).pidFile, "utf-8").trim();
+    expect(Number(content)).toBe(process.pid);
+    expect(existsSync(pathsFor(dir).pidFile + ".tmp")).toBe(false);
+  });
+
+  it("tryAcquirePid is race-safe: a competing writer between read and write loses gracefully", () => {
+    // Reproduces the TOCTOU window in the original implementation:
+    //
+    //   A reads pid file → dead/missing
+    //   B reads pid file → dead/missing
+    //   A writes its pid → wins
+    //   B writes its pid → silently overwrites A
+    //
+    // After the fix, the writer that goes second must observe the
+    // existing live pid file and fail the acquire. We simulate this
+    // by injecting a hook that fires *between* the liveness check
+    // and the pid write, where a competitor materialises the file.
+    writeFileSync(pathsFor(dir).pidFile, "999999999"); // looks stale
+    const reg = new Registry(dir);
+    const acquired = reg.tryAcquirePid({
+      onAfterLivenessCheck: () => {
+        // A competitor wrote its (live) pid into the file between our
+        // check and our write.
+        writeFileSync(pathsFor(dir).pidFile, String(process.pid));
+      },
+    });
+    expect(acquired).toBe(false);
+    // The competitor's pid must remain — we never clobbered it.
+    const after = readFileSync(pathsFor(dir).pidFile, "utf-8").trim();
+    expect(Number(after)).toBe(process.pid);
+  });
+
   it("cleanup removes pid and socket files", () => {
     const reg = new Registry(dir);
     reg.writePid();

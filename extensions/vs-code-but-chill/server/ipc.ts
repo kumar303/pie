@@ -42,6 +42,13 @@ export interface IpcServerHandlers {
 interface ConnectionState {
   socket: Socket;
   clientPid?: number;
+  /**
+   * Set true once the server has fired (or synthesised) `onBye` for
+   * this connection. Guards against double-fire when both `close`
+   * and `error` arrive on the same socket, which Node does in some
+   * failure modes.
+   */
+  byeFired?: boolean;
 }
 
 export class IpcServer {
@@ -132,12 +139,22 @@ export class IpcServer {
       }
     });
 
-    socket.on("close", () => {
+    const handleEnd = () => {
       this.#connections.delete(state);
-    });
-    socket.on("error", () => {
-      this.#connections.delete(state);
-    });
+      // If the client identified itself but never sent a graceful
+      // bye — i.e. it was hard-killed (SIGKILL of pi, host crash) —
+      // synthesise the bye so the registry refcount stays accurate
+      // and `onBye`'s last-client-shutdown logic fires. Without this
+      // the server would happily live on with a stale refcount
+      // until either the next pruneDeadClients tick or process
+      // termination.
+      if (state.clientPid !== undefined && !state.byeFired) {
+        state.byeFired = true;
+        this.#handlers.onBye(state.clientPid);
+      }
+    };
+    socket.on("close", handleEnd);
+    socket.on("error", handleEnd);
   }
 
   #dispatch(state: ConnectionState, msg: ClientMessage): void {
@@ -147,6 +164,10 @@ export class IpcServer {
         this.#handlers.onHello(msg.pid);
         break;
       case "bye":
+        // A graceful bye supersedes any synthetic close-time bye
+        // we'd otherwise fire when the socket closes immediately
+        // after.
+        state.byeFired = true;
         this.#handlers.onBye(msg.pid);
         break;
       case "ping":

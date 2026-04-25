@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveJitiCli } from "./spawn.ts";
+import { resolveJitiCli, spawnServer } from "./spawn.ts";
 
 /**
  * Build a synthetic pnpm-like layout with `@mariozechner/pi-tui` and
@@ -160,5 +160,40 @@ describe("resolveJitiCli", () => {
         resolve,
       }),
     ).toThrow(/could not resolve.*jiti/i);
+  });
+});
+
+describe("spawnServer", () => {
+  /**
+   * Build a fake child-process result so spawnServer's signature
+   * (which only reads `pid` and calls `unref`) is satisfied without
+   * touching real OS processes.
+   */
+  function fakeChild(pid: number) {
+    return { pid, unref: vi.fn() };
+  }
+
+  it("invokes node with [jitiPath, mainPath, dataDir] and unrefs the child", () => {
+    // spawnServer is intentionally minimal: orphan-server cleanup
+    // happens inside the server's monitor tick, so this function
+    // just forks Node with the right argv and detaches.
+    let observed: { command: string; args: readonly string[] } | null = null;
+    const child = fakeChild(123);
+    const spawn = vi.fn((command: string, args: readonly string[]) => {
+      observed = { command, args };
+      return child;
+    });
+
+    const result = spawnServer("/path/main.ts", "/data", {
+      jitiPath: "/jiti.mjs",
+      spawn,
+    });
+
+    expect(result.pid).toBe(123);
+    expect(observed).toEqual({
+      command: process.execPath,
+      args: ["/jiti.mjs", "/path/main.ts", "/data"],
+    });
+    expect(child.unref).toHaveBeenCalledOnce();
   });
 });

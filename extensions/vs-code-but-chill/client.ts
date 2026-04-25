@@ -26,7 +26,9 @@ export function defaultDataDir(): string {
 
 export interface EnsureServerDeps {
   dataDir: string;
-  spawnServer: (dataDir: string) => { pid: number | undefined };
+  spawnServer: (
+    dataDir: string,
+  ) => { pid: number | undefined } | Promise<{ pid: number | undefined }>;
   /** Retry timing — override in tests. */
   retryDelayMs?: number;
   retryCount?: number;
@@ -101,7 +103,7 @@ export async function ensureServer(
     }
   }
 
-  deps.spawnServer(dataDir);
+  await deps.spawnServer(dataDir);
 
   // Retry connect
   let lastErr: unknown = null;

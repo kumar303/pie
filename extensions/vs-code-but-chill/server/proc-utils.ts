@@ -218,3 +218,139 @@ export function deepestCommonAncestor(paths: string[]): string | null {
 }
 
 export const __testonly = { deepestCommonAncestor, join };
+
+// ── Orphan-server sweep ────────────────────────────────────────────
+//
+// The dataDir-scoped pid file in `registry.ts` only protects against
+// a *second* server running in the *same* dataDir. It can't see
+// orphan servers from earlier `pi -e` sessions whose dataDir was a
+// fresh temp directory, or from a different checkout of this
+// extension entirely.
+
+/**
+ * `pgrep -af <pattern>` matches against the full command line as a
+ * regex. We anchor on the relative path of `server/main.ts` so we
+ * find this extension's server regardless of where the repo is
+ * checked out, and we escape `.` so the dot doesn't accidentally
+ * match other characters in unrelated processes' command lines.
+ */
+export const SERVER_PGREP_PATTERN = "vs-code-but-chill/server/main\\.ts";
+
+interface FoundServer {
+  pid: number;
+  dataDir: string;
+}
+
+type ExecFn = (file: string, args: string[]) => Promise<{ stdout: string }>;
+
+/**
+ * Pure parser for one line of `pgrep -afl` output. Returns null when
+ * the line isn't a valid vs-code-but-chill server invocation.
+ *
+ * Expected shape:
+ *   `<pid> <node> <jiti-cli> <...>/server/main.ts <dataDir>`
+ */
+export function parseServerPgrepLine(line: string): FoundServer | null {
+  if (!line) return null;
+  const tokens = line.trim().split(/\s+/);
+  if (tokens.length < 2) return null;
+  const pid = Number(tokens[0]);
+  if (!Number.isFinite(pid) || pid <= 0 || !/^\d+$/.test(tokens[0])) {
+    return null;
+  }
+  const mainIdx = tokens.findIndex((t) =>
+    t.endsWith("/vs-code-but-chill/server/main.ts"),
+  );
+  if (mainIdx < 0) return null;
+  const dataDir = tokens[mainIdx + 1];
+  if (!dataDir) return null;
+  return { pid, dataDir };
+}
+
+/**
+ * Enumerate every running server process. Errors from `pgrep` other
+ * than "no matches" (exit 1) bubble up so a misconfigured environment
+ * is visible instead of silently pretending no orphans exist.
+ */
+export async function findOtherServers(opts?: {
+  exec?: ExecFn;
+  selfPid?: number;
+}): Promise<FoundServer[]> {
+  const exec: ExecFn =
+    opts?.exec ??
+    (((file: string, args: string[]) =>
+      execFileP(file, args, { maxBuffer: 10 * 1024 * 1024 })) as ExecFn);
+
+  let stdout: string;
+  try {
+    const result = await exec("/usr/bin/pgrep", ["-afl", SERVER_PGREP_PATTERN]);
+    stdout = result.stdout;
+  } catch (err) {
+    // pgrep exits 1 when there are no matches — not an error.
+    if (
+      err &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as { code: unknown }).code === 1
+    ) {
+      return [];
+    }
+    throw err;
+  }
+
+  const out: FoundServer[] = [];
+  for (const line of stdout.split("\n")) {
+    const parsed = parseServerPgrepLine(line);
+    if (!parsed) continue;
+    if (opts?.selfPid !== undefined && parsed.pid === opts.selfPid) continue;
+    out.push(parsed);
+  }
+  return out;
+}
+
+/** Minimal write-only log sink. Matches `LogWriter` in `./log.ts`. */
+export interface SweepLogSink {
+  write(line: string): void;
+}
+
+/**
+ * Sweep the host for any sibling vs-code-but-chill servers running
+ * in *other* dataDirs and terminate them. Run once at startup so
+ * orphans are dead before we bind the socket. Failures are caught
+ * and logged so a transient pgrep / kill issue never blocks startup.
+ */
+export async function sweepOrphanServers(opts: {
+  dataDir: string;
+  log: SweepLogSink;
+  exec?: ExecFn;
+  kill?: (pid: number) => Promise<boolean>;
+}): Promise<void> {
+  const killFn = opts.kill ?? ((pid: number) => killWithTimeout(pid));
+  try {
+    const found = await findOtherServers({
+      exec: opts.exec,
+      selfPid: process.pid,
+    });
+    const killed: number[] = [];
+    const failed: number[] = [];
+    for (const f of found) {
+      if (f.dataDir === opts.dataDir) continue;
+      const ok = await killFn(f.pid);
+      if (ok) killed.push(f.pid);
+      else failed.push(f.pid);
+    }
+    if (killed.length > 0) {
+      opts.log.write(
+        `swept orphan vs-code-but-chill servers: pids=${killed.join(",")}`,
+      );
+    }
+    if (failed.length > 0) {
+      opts.log.write(
+        `could not kill orphan vs-code-but-chill server pids: ${failed.join(",")}`,
+      );
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    opts.log.write(`orphan sweep failed: ${message}`);
+  }
+}
