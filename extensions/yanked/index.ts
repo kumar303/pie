@@ -25,7 +25,14 @@ import {
 import { copyToClipboard } from "./clipboard.ts";
 import type { StoreIO } from "./store.ts";
 
-export { yankPrompt, handlePop, handleList };
+/** Dependencies overridable for tests. */
+export interface YankedDeps {
+  /** Override the on-disk store directory. Defaults to ~/.cache/yanked-pi-extension/v1. */
+  storePath?: string;
+  /** Override the store entirely (for simulating I/O failures). Takes precedence over storePath. */
+  store?: StoreIO;
+  copyToClipboard?: (text: string) => void;
+}
 
 function yankPrompt(
   store: StoreIO,
@@ -178,8 +185,11 @@ async function handleList(
   notify("Popped yanked prompt into editor", "info");
 }
 
-export default function (pi: ExtensionAPI) {
-  const store = createFileStore();
+export default function (pi: ExtensionAPI, deps: YankedDeps = {}) {
+  const store =
+    deps.store ??
+    (deps.storePath ? createFileStore(deps.storePath) : createFileStore());
+  const copy = deps.copyToClipboard ?? copyToClipboard;
 
   // Ctrl+Shift+Y: yank the current prompt
   pi.registerShortcut(Key.ctrlShift("y"), {
@@ -190,7 +200,7 @@ export default function (pi: ExtensionAPI) {
         () => ctx.ui.getEditorText(),
         (text) => ctx.ui.setEditorText(text),
         (msg, level) => ctx.ui.notify(msg, level),
-        copyToClipboard,
+        copy,
       );
     },
   });

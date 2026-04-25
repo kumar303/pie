@@ -8,6 +8,7 @@ Pi extensions repo. Do not commit changes to git automatically.
 
 # Tenets
 
+- All tests must be written in an integration style: mock the pi API and simulate how the pi object interacts with the extension handler. Only import extension components and test them directly as a last resort.
 - All tests must pass: run `pnpm test` after changes and fix errors
 - All code must compile: run `pnpm run typecheck` and fix any errors
 - All code must pass linting: run `pnpm run lint` and fix any errors

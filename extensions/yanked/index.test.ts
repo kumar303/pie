@@ -1,344 +1,647 @@
 import { describe, it, expect, vi } from "vitest";
-import { yankPrompt, handlePop, handleList } from "./index.ts";
-import { pushPrompt, type StoreIO, type YankedPrompt } from "./store.ts";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+  ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
+import { Key } from "@mariozechner/pi-tui";
+import yankedExtension from "./index.ts";
+import type { YankedDeps } from "./index.ts";
+import { createFileStore } from "./store.ts";
+import type { StoreIO, YankedPrompt } from "./store.ts";
 
-// ── Helpers ─────────────────────────────────────────────────────────
+interface RegisteredCommand {
+  description?: string;
+  handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+  getArgumentCompletions?: (
+    argumentPrefix: string,
+  ) => unknown[] | null | Promise<unknown[] | null>;
+}
 
-function memStore(initial: YankedPrompt[] = []): StoreIO {
-  let data = [...initial];
+interface RegisteredShortcut {
+  description?: string;
+  handler: (ctx: ExtensionContext) => Promise<void> | void;
+}
+
+interface NotifyCall {
+  message: string;
+  level: "info" | "warning" | "error";
+}
+
+interface PiHarness {
+  pi: ExtensionAPI;
+  commands: Map<string, RegisteredCommand>;
+  shortcuts: Map<string, RegisteredShortcut>;
+  editor: { text: string };
+  /** Hook to throw or otherwise intercept setEditorText. */
+  onSetEditorText: { fn?: (text: string) => void };
+  notify: ReturnType<typeof vi.fn>;
+  select: ReturnType<typeof vi.fn>;
+  notifyCalls: () => NotifyCall[];
+  invokeShortcut: (key: string) => Promise<void>;
+  invokeCommand: (name: string, args?: string) => Promise<void>;
+  getCompletions: (prefix: string) => Promise<unknown[]>;
+}
+
+function createPiHarness(): PiHarness {
+  const commands = new Map<string, RegisteredCommand>();
+  const shortcuts = new Map<string, RegisteredShortcut>();
+  const editor = { text: "" };
+  const notify = vi.fn<(msg: string, level?: NotifyCall["level"]) => void>();
+  const select =
+    vi.fn<(title: string, items: string[]) => Promise<string | undefined>>();
+
+  const onSetEditorText: { fn?: (text: string) => void } = {};
+  const ui = {
+    getEditorText: () => editor.text,
+    setEditorText: (text: string) => {
+      if (onSetEditorText.fn) onSetEditorText.fn(text);
+      editor.text = text;
+    },
+    notify: (msg: string, level?: NotifyCall["level"]) =>
+      notify(msg, level ?? "info"),
+    select: (title: string, items: string[]) => select(title, items),
+  } as unknown as ExtensionContext["ui"];
+
+  const ctx = { ui } as unknown as ExtensionCommandContext;
+
+  const pi = {
+    registerShortcut: (key: string, options: RegisteredShortcut) => {
+      shortcuts.set(key, options);
+    },
+    registerCommand: (name: string, options: RegisteredCommand) => {
+      commands.set(name, options);
+    },
+  } as unknown as ExtensionAPI;
+
   return {
-    read: () => [...data],
-    write: (prompts) => {
-      data = [...prompts];
+    pi,
+    commands,
+    shortcuts,
+    editor,
+    onSetEditorText,
+    notify,
+    select,
+    notifyCalls: () =>
+      notify.mock.calls.map(([message, level]) => ({
+        message,
+        level: (level ?? "info") as NotifyCall["level"],
+      })),
+    invokeShortcut: async (key: string) => {
+      const shortcut = shortcuts.get(key);
+      if (!shortcut) throw new Error(`No shortcut registered for ${key}`);
+      await shortcut.handler(ctx);
+    },
+    invokeCommand: async (name: string, args = "") => {
+      const command = commands.get(name);
+      if (!command) throw new Error(`No command registered: ${name}`);
+      await command.handler(args, ctx);
+    },
+    getCompletions: async (prefix: string) => {
+      const command = commands.get("yanked");
+      if (!command?.getArgumentCompletions)
+        throw new Error("yanked command has no completions");
+      const result = await command.getArgumentCompletions(prefix);
+      return result ?? [];
     },
   };
 }
 
-function makePrompt(text: string, timestamp = Date.now()): YankedPrompt {
-  return { text, timestamp };
+interface SetupOptions {
+  /** Override the store entirely (used for failure-injection tests). */
+  store?: StoreIO;
+  /** Override the clipboard copy function. */
+  copy?: (text: string) => void;
+  /** Pre-seed the on-disk store before the extension reads it. */
+  initial?: YankedPrompt[];
 }
 
-// ── yankPrompt ──────────────────────────────────────────────────────
+/**
+ * Build the extension under test against a real file-backed store rooted at
+ * a freshly-created temp directory. The returned object is `using`-disposable
+ * so the temp dir is removed automatically at scope exit, even on failure.
+ */
+function setUpHarness(options: SetupOptions = {}) {
+  const harness = createPiHarness();
+  const tempDir = mkdtempSync(join(tmpdir(), "yanked-test-"));
 
-describe("yankPrompt", () => {
-  it("does nothing when the editor is empty", () => {
-    const store = memStore();
-    const notify = vi.fn();
-    const setEditorText = vi.fn();
-    const copy = vi.fn();
-
-    yankPrompt(store, () => "", setEditorText, notify, copy);
-
-    expect(notify).toHaveBeenCalledWith(
-      "Nothing to yank — editor is empty",
-      "warning",
+  if (options.initial && options.initial.length > 0) {
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(
+      join(tempDir, "prompts.json"),
+      JSON.stringify(options.initial, null, 2),
+      "utf-8",
     );
-    expect(setEditorText).not.toHaveBeenCalled();
-    expect(copy).not.toHaveBeenCalled();
-    expect(store.read()).toHaveLength(0);
+  }
+
+  const copy = options.copy ?? vi.fn();
+  // Failure-injection tests pass an explicit StoreIO. Everything else uses
+  // a real file-backed store rooted at the temp directory.
+  const deps: YankedDeps = options.store
+    ? { store: options.store, copyToClipboard: copy }
+    : { storePath: tempDir, copyToClipboard: copy };
+  yankedExtension(harness.pi, deps);
+
+  // Reads from `harness.store` should reflect what the extension is actually
+  // using — the injected mock for failure tests, otherwise a fresh reader
+  // pointed at the same on-disk directory.
+  const store: StoreIO = options.store ?? createFileStore(tempDir);
+
+  return {
+    ...harness,
+    store,
+    copy,
+    tempDir,
+    [Symbol.dispose]() {
+      rmSync(tempDir, { recursive: true, force: true });
+    },
+  };
+}
+
+const yankShortcutKey = Key.ctrlShift("y");
+
+describe("yanked extension registration", () => {
+  it("registers the Ctrl+Shift+Y shortcut and the /yanked command", () => {
+    using harness = setUpHarness();
+
+    expect(harness.shortcuts.has(yankShortcutKey)).toBe(true);
+    expect(harness.shortcuts.get(yankShortcutKey)?.description).toMatch(
+      /yank/i,
+    );
+
+    expect(harness.commands.has("yanked")).toBe(true);
+    expect(harness.commands.get("yanked")?.description).toMatch(/pop|list/i);
   });
 
-  it("does nothing when the editor is only whitespace", () => {
-    const store = memStore();
-    const notify = vi.fn();
-    const setEditorText = vi.fn();
-    const copy = vi.fn();
+  it("offers `pop` and `list` argument completions filtered by prefix", async () => {
+    using harness = setUpHarness();
 
-    yankPrompt(store, () => "   \n  ", setEditorText, notify, copy);
+    const all = await harness.getCompletions("");
+    expect(all).toEqual([
+      { value: "pop", label: "pop" },
+      { value: "list", label: "list" },
+    ]);
 
-    expect(notify).toHaveBeenCalledWith(
-      "Nothing to yank — editor is empty",
-      "warning",
-    );
-    expect(store.read()).toHaveLength(0);
-  });
-
-  it("yanks the prompt: saves to store, clears editor, copies to clipboard", () => {
-    const store = memStore();
-    const notify = vi.fn();
-    const setEditorText = vi.fn();
-    const copy = vi.fn();
-
-    yankPrompt(store, () => "my prompt text", setEditorText, notify, copy);
-
-    // Saved to store
-    const prompts = store.read();
-    expect(prompts).toHaveLength(1);
-    expect(prompts[0].text).toBe("my prompt text");
-
-    // Editor cleared
-    expect(setEditorText).toHaveBeenCalledWith("");
-
-    // Copied to clipboard
-    expect(copy).toHaveBeenCalledWith("my prompt text");
-
-    // Success notification
-    expect(notify).toHaveBeenCalledWith(
-      "Prompt yanked and copied to clipboard",
-      "info",
-    );
-  });
-
-  it("still saves to store when clipboard copy fails", () => {
-    const store = memStore();
-    const notify = vi.fn();
-    const setEditorText = vi.fn();
-    const copy = vi.fn().mockImplementation(() => {
-      throw new Error("pbcopy not found");
-    });
-
-    yankPrompt(store, () => "my prompt", setEditorText, notify, copy);
-
-    // Saved to store
-    expect(store.read()).toHaveLength(1);
-    // Editor cleared
-    expect(setEditorText).toHaveBeenCalledWith("");
-    // Warning about clipboard
-    expect(notify).toHaveBeenCalledWith(
-      expect.stringContaining("clipboard copy failed"),
-      "warning",
-    );
-  });
-
-  it("does not clear the editor when store write fails", () => {
-    const store = memStore();
-    // Make the store write throw
-    store.write = () => {
-      throw new Error("disk full");
-    };
-    const notify = vi.fn();
-    const setEditorText = vi.fn();
-    const copy = vi.fn();
-
-    yankPrompt(store, () => "important text", setEditorText, notify, copy);
-
-    // Editor should NOT be cleared
-    expect(setEditorText).not.toHaveBeenCalled();
-    // Clipboard should NOT be called
-    expect(copy).not.toHaveBeenCalled();
-    // Error notification
-    expect(notify).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to save prompt"),
-      "error",
-    );
+    const filtered = await harness.getCompletions("p");
+    expect(filtered).toEqual([{ value: "pop", label: "pop" }]);
   });
 });
 
-// ── handlePop ───────────────────────────────────────────────────────
+describe("Ctrl+Shift+Y yank shortcut", () => {
+  it("warns and does nothing when the editor is empty", async () => {
+    using harness = setUpHarness();
+    harness.editor.text = "";
 
-describe("handlePop", () => {
-  it("reports an error when the editor is not empty", () => {
-    const store = memStore([makePrompt("saved")]);
-    const notify = vi.fn();
-    const setEditorText = vi.fn();
+    await harness.invokeShortcut(yankShortcutKey);
 
-    handlePop(store, () => "existing text", setEditorText, notify);
-
-    expect(notify).toHaveBeenCalledWith(
-      expect.stringContaining("editor is not empty"),
-      "error",
-    );
-    expect(setEditorText).not.toHaveBeenCalled();
-    // Prompt should still be in store
-    expect(store.read()).toHaveLength(1);
+    expect(harness.notifyCalls()).toEqual([
+      { message: "Nothing to yank — editor is empty", level: "warning" },
+    ]);
+    expect(harness.editor.text).toBe("");
+    expect(harness.copy).not.toHaveBeenCalled();
+    expect(harness.store.read()).toHaveLength(0);
   });
 
-  it("reports a warning when no prompts are stored", () => {
-    const store = memStore();
-    const notify = vi.fn();
-    const setEditorText = vi.fn();
+  it("warns when the editor contains only whitespace", async () => {
+    using harness = setUpHarness();
+    harness.editor.text = "   \n  ";
 
-    handlePop(store, () => "", setEditorText, notify);
+    await harness.invokeShortcut(yankShortcutKey);
 
-    expect(notify).toHaveBeenCalledWith("No yanked prompts to pop", "warning");
-    expect(setEditorText).not.toHaveBeenCalled();
+    expect(harness.notifyCalls()).toEqual([
+      { message: "Nothing to yank — editor is empty", level: "warning" },
+    ]);
+    expect(harness.store.read()).toHaveLength(0);
   });
 
-  it("pops the most recent prompt into the editor", () => {
-    const store = memStore();
-    pushPrompt(store, "first");
-    pushPrompt(store, "second");
-    const notify = vi.fn();
-    const setEditorText = vi.fn();
+  it("saves the prompt, clears the editor, and copies to clipboard", async () => {
+    using harness = setUpHarness();
+    harness.editor.text = "my prompt text";
 
-    handlePop(store, () => "", setEditorText, notify);
+    await harness.invokeShortcut(yankShortcutKey);
 
-    expect(setEditorText).toHaveBeenCalledWith("second");
-    expect(notify).toHaveBeenCalledWith(
-      "Popped yanked prompt into editor",
-      "info",
-    );
-    // Only "first" should remain
-    expect(store.read()).toHaveLength(1);
-    expect(store.read()[0].text).toBe("first");
-  });
+    expect(harness.editor.text).toBe("");
+    expect(harness.copy).toHaveBeenCalledWith("my prompt text");
 
-  it("allows popping when editor has only whitespace", () => {
-    const store = memStore();
-    pushPrompt(store, "my prompt");
-    const setEditorText = vi.fn();
+    const stored = harness.store.read();
+    expect(stored).toHaveLength(1);
+    expect(stored[0].text).toBe("my prompt text");
+    expect(stored[0].timestamp).toBeGreaterThan(0);
 
-    handlePop(store, () => "   ", setEditorText, vi.fn());
-
-    expect(setEditorText).toHaveBeenCalledWith("my prompt");
-  });
-
-  it("keeps prompt in store if store removal fails after editor is set", () => {
-    const store = memStore();
-    pushPrompt(store, "precious");
-    const notify = vi.fn();
-    const setEditorText = vi.fn();
-    // Make writes fail (simulating disk error on popPrompt's write)
-    store.write = () => {
-      throw new Error("disk error");
-    };
-
-    handlePop(store, () => "", setEditorText, notify);
-
-    // Editor should still have the text (set before removal)
-    expect(setEditorText).toHaveBeenCalledWith("precious");
-    // Error reported
-    expect(notify).toHaveBeenCalledWith(
-      expect.stringContaining("failed to update store"),
-      "error",
-    );
-  });
-});
-
-// ── handleList ──────────────────────────────────────────────────────
-
-describe("handleList", () => {
-  it("reports a warning when no prompts are stored", async () => {
-    const store = memStore();
-    const notify = vi.fn();
-    const select = vi.fn();
-
-    await handleList(store, () => "", vi.fn(), notify, select);
-
-    expect(notify).toHaveBeenCalledWith("No yanked prompts stored", "warning");
-    expect(select).not.toHaveBeenCalled();
-  });
-
-  it("shows a select dialog with most recent prompt first", async () => {
-    const store = memStore();
-    pushPrompt(store, "alpha");
-    pushPrompt(store, "beta");
-    const select = vi.fn().mockResolvedValue(null);
-
-    await handleList(store, () => "", vi.fn(), vi.fn(), select);
-
-    expect(select).toHaveBeenCalledWith("Yanked prompts (Enter to pop)", [
-      "1. beta",
-      "2. alpha",
+    expect(harness.notifyCalls()).toEqual([
+      { message: "Prompt yanked and copied to clipboard", level: "info" },
     ]);
   });
 
-  it("truncates long prompts in the list", async () => {
-    const store = memStore();
-    const longText = "a".repeat(100);
-    pushPrompt(store, longText);
-    const select = vi.fn().mockResolvedValue(null);
+  it("persists the saved prompt to disk so a fresh extension instance can read it", async () => {
+    using harness = setUpHarness();
+    harness.editor.text = "durable prompt";
 
-    await handleList(store, () => "", vi.fn(), vi.fn(), select);
+    await harness.invokeShortcut(yankShortcutKey);
 
-    const items = select.mock.calls[0][1] as string[];
-    expect(items[0].length).toBeLessThan(70);
-    expect(items[0]).toContain("...");
+    // Build a brand-new extension instance pointed at the same temp dir,
+    // bypassing the in-memory state. It must see the persisted prompt.
+    const freshStore = createFileStore(harness.tempDir);
+    expect(freshStore.read().map((p) => p.text)).toEqual(["durable prompt"]);
   });
 
-  it("replaces newlines with ↵ in the list", async () => {
-    const store = memStore();
-    pushPrompt(store, "line1\nline2");
-    const select = vi.fn().mockResolvedValue(null);
+  it("still saves to the store when clipboard copy fails", async () => {
+    const copy = vi.fn(() => {
+      throw new Error("pbcopy not found");
+    });
+    using harness = setUpHarness({ copy });
+    harness.editor.text = "my prompt";
 
-    await handleList(store, () => "", vi.fn(), vi.fn(), select);
+    await harness.invokeShortcut(yankShortcutKey);
 
-    const items = select.mock.calls[0][1] as string[];
+    expect(harness.store.read()).toHaveLength(1);
+    expect(harness.editor.text).toBe("");
+
+    const calls = harness.notifyCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe("warning");
+    expect(calls[0].message).toContain("clipboard copy failed");
+    expect(calls[0].message).toContain("pbcopy not found");
+  });
+
+  it("does not clear the editor when the store write fails", async () => {
+    const failingStore: StoreIO = {
+      read: () => [],
+      write: () => {
+        throw new Error("disk full");
+      },
+    };
+    using harness = setUpHarness({ store: failingStore });
+    harness.editor.text = "important text";
+
+    await harness.invokeShortcut(yankShortcutKey);
+
+    expect(harness.editor.text).toBe("important text");
+    expect(harness.copy).not.toHaveBeenCalled();
+
+    const calls = harness.notifyCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe("error");
+    expect(calls[0].message).toContain("Failed to save prompt");
+    expect(calls[0].message).toContain("disk full");
+  });
+
+  it("ejects the oldest prompt once the store reaches capacity", async () => {
+    // Pre-fill 10 prompts (the storage cap), then yank an 11th.
+    const initial: YankedPrompt[] = Array.from({ length: 10 }, (_, i) => ({
+      text: `old-${i}`,
+      timestamp: i + 1,
+    }));
+    using harness = setUpHarness({ initial });
+
+    harness.editor.text = "newest";
+    await harness.invokeShortcut(yankShortcutKey);
+
+    const stored = harness.store.read();
+    expect(stored).toHaveLength(10);
+    expect(stored[0].text).toBe("old-1"); // old-0 ejected
+    expect(stored[stored.length - 1].text).toBe("newest");
+  });
+
+  it("recovers gracefully when the on-disk store contains malformed JSON", async () => {
+    using harness = setUpHarness();
+    // Corrupt the store file before the extension reads it.
+    writeFileSync(
+      join(harness.tempDir, "prompts.json"),
+      "{ not valid json",
+      "utf-8",
+    );
+    harness.editor.text = "after corruption";
+
+    await harness.invokeShortcut(yankShortcutKey);
+
+    // The corrupt file is treated as empty — the new prompt is the only one.
+    expect(harness.store.read().map((p) => p.text)).toEqual([
+      "after corruption",
+    ]);
+    expect(harness.editor.text).toBe("");
+  });
+});
+
+describe("/yanked usage", () => {
+  it("shows a usage message when invoked with no arguments", async () => {
+    using harness = setUpHarness();
+
+    await harness.invokeCommand("yanked", "");
+
+    const calls = harness.notifyCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe("warning");
+    expect(calls[0].message).toContain("Usage:");
+    expect(calls[0].message).toContain("pop");
+    expect(calls[0].message).toContain("list");
+  });
+
+  it("shows a usage message for an unknown subcommand", async () => {
+    using harness = setUpHarness();
+
+    await harness.invokeCommand("yanked", "wat");
+
+    const calls = harness.notifyCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe("warning");
+    expect(calls[0].message).toContain("Usage:");
+  });
+});
+
+describe("/yanked pop", () => {
+  it("warns when no prompts are stored", async () => {
+    using harness = setUpHarness();
+
+    await harness.invokeCommand("yanked", "pop");
+
+    expect(harness.notifyCalls()).toEqual([
+      { message: "No yanked prompts to pop", level: "warning" },
+    ]);
+    expect(harness.editor.text).toBe("");
+  });
+
+  it("refuses to pop when the editor is not empty", async () => {
+    using harness = setUpHarness({ initial: [{ text: "saved", timestamp: 1 }] });
+    harness.editor.text = "existing text";
+
+    await harness.invokeCommand("yanked", "pop");
+
+    const calls = harness.notifyCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe("error");
+    expect(calls[0].message).toContain("editor is not empty");
+    expect(harness.editor.text).toBe("existing text");
+    expect(harness.store.read()).toHaveLength(1);
+  });
+
+  it("pops the most recently yanked prompt back into the editor", async () => {
+    using harness = setUpHarness();
+    // Use the public yank path to seed two prompts.
+    harness.editor.text = "first";
+    await harness.invokeShortcut(yankShortcutKey);
+    harness.editor.text = "second";
+    await harness.invokeShortcut(yankShortcutKey);
+
+    harness.notify.mockClear();
+    harness.editor.text = "";
+
+    await harness.invokeCommand("yanked", "pop");
+
+    expect(harness.editor.text).toBe("second");
+    expect(harness.notifyCalls()).toEqual([
+      { message: "Popped yanked prompt into editor", level: "info" },
+    ]);
+    const remaining = harness.store.read();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].text).toBe("first");
+  });
+
+  it("pops successfully when the editor contains only whitespace", async () => {
+    using harness = setUpHarness({
+      initial: [{ text: "my prompt", timestamp: 1 }],
+    });
+    harness.editor.text = "   ";
+
+    await harness.invokeCommand("yanked", "pop");
+
+    expect(harness.editor.text).toBe("my prompt");
+    expect(harness.store.read()).toHaveLength(0);
+  });
+
+  it("keeps the prompt in the editor when the store write fails", async () => {
+    const data: YankedPrompt[] = [{ text: "precious", timestamp: 1 }];
+    const store: StoreIO = {
+      read: () => [...data],
+      write: () => {
+        // The popPrompt write fails — the editor was already filled.
+        throw new Error("disk error");
+      },
+    };
+    using harness = setUpHarness({ store });
+
+    await harness.invokeCommand("yanked", "pop");
+
+    expect(harness.editor.text).toBe("precious");
+    // The store still has the prompt because removal failed.
+    expect(harness.store.read()).toHaveLength(1);
+
+    const calls = harness.notifyCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe("error");
+    expect(calls[0].message).toContain("failed to update store");
+    expect(calls[0].message).toContain("disk error");
+  });
+});
+
+describe("/yanked list", () => {
+  it("warns when no prompts are stored", async () => {
+    using harness = setUpHarness();
+
+    await harness.invokeCommand("yanked", "list");
+
+    expect(harness.notifyCalls()).toEqual([
+      { message: "No yanked prompts stored", level: "warning" },
+    ]);
+    expect(harness.select).not.toHaveBeenCalled();
+  });
+
+  it("shows the most recently yanked prompt first", async () => {
+    using harness = setUpHarness();
+    harness.editor.text = "alpha";
+    await harness.invokeShortcut(yankShortcutKey);
+    harness.editor.text = "beta";
+    await harness.invokeShortcut(yankShortcutKey);
+    harness.select.mockResolvedValue(undefined);
+
+    await harness.invokeCommand("yanked", "list");
+
+    expect(harness.select).toHaveBeenCalledWith(
+      "Yanked prompts (Enter to pop)",
+      ["1. beta", "2. alpha"],
+    );
+  });
+
+  it("truncates long prompts in the displayed items", async () => {
+    const longText = "a".repeat(100);
+    using harness = setUpHarness({ initial: [{ text: longText, timestamp: 1 }] });
+    harness.select.mockResolvedValue(undefined);
+
+    await harness.invokeCommand("yanked", "list");
+
+    const items = harness.select.mock.calls[0][1];
+    expect(items[0]).toContain("...");
+    // "1. " + 60 chars max
+    expect(items[0].length).toBeLessThanOrEqual(63);
+  });
+
+  it("replaces newlines with ↵ in the displayed items", async () => {
+    using harness = setUpHarness({
+      initial: [{ text: "line1\nline2", timestamp: 1 }],
+    });
+    harness.select.mockResolvedValue(undefined);
+
+    await harness.invokeCommand("yanked", "list");
+
+    const items = harness.select.mock.calls[0][1];
     expect(items[0]).toContain("↵");
     expect(items[0]).not.toContain("\n");
   });
 
-  it("does nothing when user cancels the selection", async () => {
-    const store = memStore();
-    pushPrompt(store, "alpha");
-    const setEditorText = vi.fn();
-    const select = vi.fn().mockResolvedValue(null);
+  it("does nothing when the user cancels the selection", async () => {
+    using harness = setUpHarness({ initial: [{ text: "alpha", timestamp: 1 }] });
+    harness.select.mockResolvedValue(undefined);
 
-    await handleList(store, () => "", setEditorText, vi.fn(), select);
+    await harness.invokeCommand("yanked", "list");
 
-    expect(setEditorText).not.toHaveBeenCalled();
-    // Prompt should still be in store
-    expect(store.read()).toHaveLength(1);
+    expect(harness.editor.text).toBe("");
+    expect(harness.store.read()).toHaveLength(1);
+    expect(harness.notify).not.toHaveBeenCalled();
   });
 
   it("pops the selected prompt into the editor", async () => {
-    const store = memStore();
-    pushPrompt(store, "alpha");
-    pushPrompt(store, "beta");
-    pushPrompt(store, "gamma");
-    const setEditorText = vi.fn();
-    const notify = vi.fn();
-    // User selects "2. beta" — shown as item 2 (second newest)
-    const select = vi.fn().mockResolvedValue("2. beta");
-
-    await handleList(store, () => "", setEditorText, notify, select);
-
-    expect(setEditorText).toHaveBeenCalledWith("beta");
-    expect(notify).toHaveBeenCalledWith(
-      "Popped yanked prompt into editor",
-      "info",
-    );
-    // "beta" removed, "alpha" and "gamma" remain
-    const remaining = store.read();
-    expect(remaining).toHaveLength(2);
-    expect(remaining.map((p) => p.text)).toEqual(["alpha", "gamma"]);
-  });
-
-  it("re-inserts prompt into store if setEditorText fails after removal", async () => {
-    const store = memStore();
-    pushPrompt(store, "alpha");
-    pushPrompt(store, "beta");
-    const notify = vi.fn();
-    // setEditorText will throw
-    const setEditorText = vi.fn().mockImplementation(() => {
-      throw new Error("editor broke");
+    using harness = setUpHarness({
+      initial: [
+        { text: "alpha", timestamp: 1 },
+        { text: "beta", timestamp: 2 },
+        { text: "gamma", timestamp: 3 },
+      ],
     });
-    // User selects "1. beta" (most recent, shown first)
-    const select = vi.fn().mockResolvedValue("1. beta");
+    // Items shown: ["1. gamma", "2. beta", "3. alpha"] — user picks beta.
+    harness.select.mockResolvedValue("2. beta");
 
-    await handleList(store, () => "", setEditorText, notify, select);
+    await harness.invokeCommand("yanked", "list");
 
-    // Prompt should be preserved in store (re-inserted)
-    const remaining = store.read();
-    expect(remaining.some((p) => p.text === "beta")).toBe(true);
-    // Error reported
-    expect(notify).toHaveBeenCalledWith(
-      expect.stringContaining("Prompt preserved in store"),
-      "error",
-    );
+    expect(harness.editor.text).toBe("beta");
+    expect(harness.notifyCalls()).toEqual([
+      { message: "Popped yanked prompt into editor", level: "info" },
+    ]);
+    expect(harness.store.read().map((p) => p.text)).toEqual(["alpha", "gamma"]);
   });
 
-  it("reports an error when editor is not empty at selection time", async () => {
-    const store = memStore();
-    pushPrompt(store, "alpha");
-    const notify = vi.fn();
-    const setEditorText = vi.fn();
-    let editorText = "";
+  it("re-inserts the prompt into the store when filling the editor fails after removal", async () => {
+    using harness = setUpHarness({
+      initial: [
+        { text: "alpha", timestamp: 1 },
+        { text: "beta", timestamp: 2 },
+      ],
+    });
+    // User picks the most-recent prompt.
+    harness.select.mockResolvedValue("1. beta");
+    // Make setEditorText fail — only after the prompt has been removed.
+    harness.onSetEditorText.fn = () => {
+      throw new Error("editor broke");
+    };
 
-    const select = vi.fn().mockImplementation(async () => {
-      // Simulate user typing while the dialog is open
-      editorText = "typed something";
+    await harness.invokeCommand("yanked", "list");
+
+    // The prompt must be preserved in the store.
+    expect(harness.store.read().some((p) => p.text === "beta")).toBe(true);
+    const calls = harness.notifyCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe("error");
+    expect(calls[0].message).toContain("Prompt preserved in store");
+  });
+
+  it("reports a critical error when the prompt cannot be re-inserted into the store", async () => {
+    let writeCount = 0;
+    let data: YankedPrompt[] = [{ text: "alpha", timestamp: 1 }];
+    const store: StoreIO = {
+      read: () => [...data],
+      write: (prompts) => {
+        writeCount += 1;
+        if (writeCount === 1) {
+          // First write: the removePromptAt write — succeed.
+          data = [...prompts];
+          return;
+        }
+        // Second write: the re-insert pushPrompt write — fail.
+        throw new Error("disk gone");
+      },
+    };
+    using harness = setUpHarness({ store });
+    harness.select.mockResolvedValue("1. alpha");
+    harness.onSetEditorText.fn = () => {
+      throw new Error("editor broke");
+    };
+
+    await harness.invokeCommand("yanked", "list");
+
+    const calls = harness.notifyCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe("error");
+    expect(calls[0].message).toContain("CRITICAL");
+    expect(calls[0].message).toContain("alpha");
+    expect(calls[0].message).toContain("disk gone");
+  });
+
+  it("reports an error when the selected display index no longer maps to a stored prompt", async () => {
+    using harness = setUpHarness({ initial: [{ text: "alpha", timestamp: 1 }] });
+    // The dialog returns a display index that's out of range — e.g. the user
+    // somehow selects an item that's been removed concurrently.
+    harness.select.mockResolvedValue("5. ghost");
+
+    await harness.invokeCommand("yanked", "list");
+
+    const calls = harness.notifyCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe("error");
+    expect(calls[0].message).toContain("no longer exists");
+    expect(harness.editor.text).toBe("");
+    expect(harness.store.read()).toHaveLength(1);
+  });
+
+  it("silently does nothing when the selected item has no leading number", async () => {
+    using harness = setUpHarness({ initial: [{ text: "alpha", timestamp: 1 }] });
+    harness.select.mockResolvedValue("not a numbered item");
+
+    await harness.invokeCommand("yanked", "list");
+
+    expect(harness.editor.text).toBe("");
+    expect(harness.notify).not.toHaveBeenCalled();
+    expect(harness.store.read()).toHaveLength(1);
+  });
+
+  it("refuses to pop and preserves the prompt when editor was filled while the dialog was open", async () => {
+    using harness = setUpHarness({ initial: [{ text: "alpha", timestamp: 1 }] });
+    harness.select.mockImplementation(async () => {
+      // Simulate the user typing while the dialog is open.
+      harness.editor.text = "typed something";
       return "1. alpha";
     });
 
-    await handleList(store, () => editorText, setEditorText, notify, select);
+    await harness.invokeCommand("yanked", "list");
 
-    expect(notify).toHaveBeenCalledWith(
-      expect.stringContaining("editor is not empty"),
-      "error",
-    );
-    expect(setEditorText).not.toHaveBeenCalled();
-    // Prompt should still be in store
-    expect(store.read()).toHaveLength(1);
+    const calls = harness.notifyCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe("error");
+    expect(calls[0].message).toContain("editor is not empty");
+    expect(harness.editor.text).toBe("typed something");
+    expect(harness.store.read()).toHaveLength(1);
+  });
+});
+
+describe("yanked extension persistence", () => {
+  it("yanks and pops across multiple shortcut/command invocations", async () => {
+    using harness = setUpHarness();
+
+    harness.editor.text = "alpha";
+    await harness.invokeShortcut(yankShortcutKey);
+    harness.editor.text = "beta";
+    await harness.invokeShortcut(yankShortcutKey);
+    expect(harness.store.read().map((p) => p.text)).toEqual(["alpha", "beta"]);
+
+    harness.editor.text = "";
+    await harness.invokeCommand("yanked", "pop");
+    expect(harness.editor.text).toBe("beta");
+    expect(harness.store.read().map((p) => p.text)).toEqual(["alpha"]);
+
+    harness.editor.text = "";
+    await harness.invokeCommand("yanked", "pop");
+    expect(harness.editor.text).toBe("alpha");
+    expect(harness.store.read()).toHaveLength(0);
   });
 });
