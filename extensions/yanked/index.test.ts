@@ -365,7 +365,9 @@ describe("/yanked pop", () => {
   });
 
   it("refuses to pop when the editor is not empty", async () => {
-    using harness = setUpHarness({ initial: [{ text: "saved", timestamp: 1 }] });
+    using harness = setUpHarness({
+      initial: [{ text: "saved", timestamp: 1 }],
+    });
     harness.editor.text = "existing text";
 
     await harness.invokeCommand("yanked", "pop");
@@ -465,17 +467,22 @@ describe("/yanked list", () => {
     );
   });
 
-  it("truncates long prompts in the displayed items", async () => {
-    const longText = "a".repeat(100);
-    using harness = setUpHarness({ initial: [{ text: longText, timestamp: 1 }] });
+  it("passes the full prompt text to select so the TUI can use the full width", async () => {
+    // The extension should not pre-truncate items — the underlying TUI
+    // SelectList wraps/truncates based on actual terminal width. Pre-truncating
+    // here causes items to be cut off prematurely (well below the available width).
+    const longText = "a".repeat(500);
+    using harness = setUpHarness({
+      initial: [{ text: longText, timestamp: 1 }],
+    });
     harness.select.mockResolvedValue(undefined);
 
     await harness.invokeCommand("yanked", "list");
 
     const items = harness.select.mock.calls[0][1];
-    expect(items[0]).toContain("...");
-    // "1. " + 60 chars max
-    expect(items[0].length).toBeLessThanOrEqual(63);
+    // Item should contain the full prompt text (plus the "1. " prefix).
+    expect(items[0]).toBe(`1. ${longText}`);
+    expect(items[0]).not.toContain("...");
   });
 
   it("replaces newlines with ↵ in the displayed items", async () => {
@@ -492,7 +499,9 @@ describe("/yanked list", () => {
   });
 
   it("does nothing when the user cancels the selection", async () => {
-    using harness = setUpHarness({ initial: [{ text: "alpha", timestamp: 1 }] });
+    using harness = setUpHarness({
+      initial: [{ text: "alpha", timestamp: 1 }],
+    });
     harness.select.mockResolvedValue(undefined);
 
     await harness.invokeCommand("yanked", "list");
@@ -579,7 +588,9 @@ describe("/yanked list", () => {
   });
 
   it("reports an error when the selected display index no longer maps to a stored prompt", async () => {
-    using harness = setUpHarness({ initial: [{ text: "alpha", timestamp: 1 }] });
+    using harness = setUpHarness({
+      initial: [{ text: "alpha", timestamp: 1 }],
+    });
     // The dialog returns a display index that's out of range — e.g. the user
     // somehow selects an item that's been removed concurrently.
     harness.select.mockResolvedValue("5. ghost");
@@ -595,7 +606,9 @@ describe("/yanked list", () => {
   });
 
   it("silently does nothing when the selected item has no leading number", async () => {
-    using harness = setUpHarness({ initial: [{ text: "alpha", timestamp: 1 }] });
+    using harness = setUpHarness({
+      initial: [{ text: "alpha", timestamp: 1 }],
+    });
     harness.select.mockResolvedValue("not a numbered item");
 
     await harness.invokeCommand("yanked", "list");
@@ -606,7 +619,9 @@ describe("/yanked list", () => {
   });
 
   it("refuses to pop and preserves the prompt when editor was filled while the dialog was open", async () => {
-    using harness = setUpHarness({ initial: [{ text: "alpha", timestamp: 1 }] });
+    using harness = setUpHarness({
+      initial: [{ text: "alpha", timestamp: 1 }],
+    });
     harness.select.mockImplementation(async () => {
       // Simulate the user typing while the dialog is open.
       harness.editor.text = "typed something";

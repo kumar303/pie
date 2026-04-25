@@ -127,11 +127,12 @@ async function handleList(
     return;
   }
 
-  // Show most recent first
+  // Show most recent first. Pass the full prompt text (collapsed to a single
+  // line) so the underlying TUI selector can wrap/truncate based on the actual
+  // terminal width — pre-truncating here cuts items off prematurely.
   const reversed = [...prompts].reverse();
   const items = reversed.map((p, i) => {
-    const preview = p.text.length > 60 ? p.text.slice(0, 57) + "..." : p.text;
-    const singleLine = preview.replace(/\n/g, "↵");
+    const singleLine = p.text.replace(/\n/g, "↵");
     return `${i + 1}. ${singleLine}`;
   });
 
