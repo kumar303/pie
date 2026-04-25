@@ -14,7 +14,19 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Key } from "@mariozechner/pi-tui";
+import type { Component } from "@mariozechner/pi-tui";
+import { Key, matchesKey, Text, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+
+/**
+ * Minimal subset of the Theme API the list view depends on. We type against
+ * this rather than the full `Theme` class so the view is easy to construct
+ * from the `ctx.ui.custom` factory without dragging in pi-coding-agent's
+ * theme module.
+ */
+interface ListViewTheme {
+  fg(color: "accent" | "dim" | "text", text: string): string;
+  bold(text: string): string;
+}
 import {
   createFileStore,
   pushPrompt,
@@ -32,6 +44,82 @@ export interface YankedDeps {
   /** Override the store entirely (for simulating I/O failures). Takes precedence over storePath. */
   store?: StoreIO;
   copyToClipboard?: (text: string) => void;
+  /** Override the terminal width used to format list items. Defaults to process.stdout.columns. */
+  getTerminalWidth?: () => number;
+  /**
+   * Override how the user picks an item from the list view. Receives the
+   * pre-formatted display strings and resolves with the chosen 0-based
+   * display index, or `undefined` if the user cancelled. Tests inject this
+   * to bypass real TUI rendering; production uses a custom overlay built on
+   * `ctx.ui.custom`.
+   */
+  pickIndex?: (items: string[]) => Promise<number | undefined>;
+}
+
+/** Maximum number of visible lines per item in the /yanked list view. */
+const MAX_LIST_ITEM_LINES = 5;
+
+/**
+ * Format a stored prompt as a list item for the /yanked list selector.
+ *
+ * - Prefixes the first line with `${displayNumber}. ` and indents wrapped or
+ *   continued lines with the same number of spaces (the "number gutter") so
+ *   they align under the prompt text.
+ * - Soft-wraps each input line to the available content width so long single
+ *   lines don’t overflow the dialog.
+ * - Caps the result at MAX_LIST_ITEM_LINES; when the prompt has more lines,
+ *   the last visible line is replaced with `[N more lines]`.
+ */
+/**
+ * Width of the cursor prefix (“▸ ” for the selected item, “  ” otherwise)
+ * that the list view prepends to every rendered line. We reserve this many
+ * columns when wrapping so wrapped continuation lines stay within the
+ * available content width.
+ */
+const CURSOR_PREFIX_WIDTH = 2;
+
+export function formatListItem(
+  text: string,
+  displayNumber: number,
+  terminalWidth: number,
+): string {
+  const prefix = `${displayNumber}. `;
+  // Continuations are indented by exactly the gutter width so they line up
+  // under the prompt text on the first line. The view itself adds the cursor
+  // prefix to every rendered line, which keeps both the first-line gutter
+  // and the continuation indent visually aligned.
+  const indent = " ".repeat(prefix.length);
+  // The view’s Text component reserves 1 column of padding on each side, the
+  // cursor prefix takes another `CURSOR_PREFIX_WIDTH`, and the gutter takes
+  // `prefix.length` on the first line.
+  const contentWidth = Math.max(
+    1,
+    terminalWidth - 2 - CURSOR_PREFIX_WIDTH - prefix.length,
+  );
+
+  // Wrap each input line individually so explicit newlines are preserved
+  // and each wrapped continuation gets the hanging indent.
+  const lines = text
+    .split("\n")
+    .flatMap((line) =>
+      line === "" ? [""] : wrapTextWithAnsi(line, contentWidth),
+    );
+
+  if (lines.length <= MAX_LIST_ITEM_LINES) {
+    return [prefix + lines[0], ...lines.slice(1).map((l) => indent + l)].join(
+      "\n",
+    );
+  }
+
+  const visibleCount = MAX_LIST_ITEM_LINES - 1;
+  const visible = lines.slice(0, visibleCount);
+  const hidden = lines.length - visibleCount;
+  const formatted = [
+    prefix + visible[0],
+    ...visible.slice(1).map((l) => indent + l),
+    `${indent}[${hidden} more lines]`,
+  ];
+  return formatted.join("\n");
 }
 
 function yankPrompt(
@@ -116,10 +204,8 @@ async function handleList(
   getEditorText: () => string,
   setEditorText: (text: string) => void,
   notify: (msg: string, level: "info" | "warning" | "error") => void,
-  select: (
-    title: string,
-    items: string[],
-  ) => Promise<string | null | undefined>,
+  pickIndex: (items: string[]) => Promise<number | null | undefined>,
+  getTerminalWidth: () => number,
 ): Promise<void> {
   const prompts = listPrompts(store);
   if (prompts.length === 0) {
@@ -127,23 +213,15 @@ async function handleList(
     return;
   }
 
-  // Show most recent first. Pass the full prompt text (collapsed to a single
-  // line) so the underlying TUI selector can wrap/truncate based on the actual
-  // terminal width — pre-truncating here cuts items off prematurely.
+  // Show most recent first. Each item gets its lines wrapped at the available
+  // terminal width with a hanging indent under the number gutter, and is
+  // capped at MAX_LIST_ITEM_LINES (the rest collapsed into "[N more lines]").
+  const width = getTerminalWidth();
   const reversed = [...prompts].reverse();
-  const items = reversed.map((p, i) => {
-    const singleLine = p.text.replace(/\n/g, "↵");
-    return `${i + 1}. ${singleLine}`;
-  });
+  const items = reversed.map((p, i) => formatListItem(p.text, i + 1, width));
 
-  const selected = await select("Yanked prompts (Enter to pop)", items);
-  if (selected == null) return;
-
-  // Extract display index from "N. preview" format, then map back to store index
-  const match = selected.match(/^(\d+)\./);
-  if (!match) return;
-  const displayIndex = parseInt(match[1], 10) - 1;
-  if (isNaN(displayIndex)) return;
+  const displayIndex = await pickIndex(items);
+  if (displayIndex == null) return;
   // reversed[displayIndex] corresponds to prompts[prompts.length - 1 - displayIndex]
   const index = prompts.length - 1 - displayIndex;
 
@@ -186,6 +264,83 @@ async function handleList(
   notify("Popped yanked prompt into editor", "info");
 }
 
+function defaultGetTerminalWidth(): number {
+  return process.stdout.columns ?? 80;
+}
+
+/**
+ * Build the list view used by `/yanked list`. Renders a header with the title
+ * and our own legend ("Enter pop" instead of the framework default "Enter
+ * select"), then the items as multi-line entries with the cursor-highlighted
+ * row in the accent color.
+ *
+ * `done(index)` is called with the 0-based display index when the user picks
+ * an item, or `undefined` if they cancel.
+ */
+export function createYankedListView(
+  tui: { requestRender(): void },
+  theme: ListViewTheme,
+  items: string[],
+  done: (value: number | undefined) => void,
+): Component {
+  let cursor = 0;
+  const text = new Text("", 1, 0);
+
+  const TITLE = "Yanked prompts";
+  const LEGEND = "↑/↓ navigate  Enter pop  Esc cancel";
+
+  const rebuild = () => {
+    const lines: string[] = [
+      theme.bold(theme.fg("accent", TITLE)),
+      theme.fg("dim", LEGEND),
+      "",
+    ];
+    for (let i = 0; i < items.length; i++) {
+      const itemLines = items[i].split("\n");
+      const isSelected = i === cursor;
+      const cursorPrefix = isSelected ? theme.fg("accent", "▸ ") : "  ";
+      const continuationPrefix = "  ";
+      for (let li = 0; li < itemLines.length; li++) {
+        const linePrefix = li === 0 ? cursorPrefix : continuationPrefix;
+        const body = isSelected
+          ? theme.fg("accent", itemLines[li])
+          : itemLines[li];
+        lines.push(linePrefix + body);
+      }
+    }
+    text.setText(lines.join("\n"));
+  };
+
+  rebuild();
+
+  return {
+    render: (width: number) => text.render(width),
+    invalidate: () => text.invalidate(),
+    handleInput: (data: string) => {
+      if (matchesKey(data, Key.escape)) {
+        done(undefined);
+        return;
+      }
+      if (matchesKey(data, Key.enter)) {
+        done(cursor);
+        return;
+      }
+      if (matchesKey(data, Key.up)) {
+        cursor = cursor === 0 ? items.length - 1 : cursor - 1;
+        rebuild();
+        tui.requestRender();
+        return;
+      }
+      if (matchesKey(data, Key.down)) {
+        cursor = cursor === items.length - 1 ? 0 : cursor + 1;
+        rebuild();
+        tui.requestRender();
+        return;
+      }
+    },
+  };
+}
+
 export default function (pi: ExtensionAPI, deps: YankedDeps = {}) {
   const store =
     deps.store ??
@@ -223,12 +378,19 @@ export default function (pi: ExtensionAPI, deps: YankedDeps = {}) {
       }
 
       if (subcommand === "list") {
+        const pickIndex =
+          deps.pickIndex ??
+          ((items: string[]) =>
+            ctx.ui.custom<number | undefined>((tui, theme, _kb, done) =>
+              createYankedListView(tui, theme, items, done),
+            ));
         await handleList(
           store,
           () => ctx.ui.getEditorText(),
           (text) => ctx.ui.setEditorText(text),
           (msg, level) => ctx.ui.notify(msg, level),
-          (title, items) => ctx.ui.select(title, items),
+          pickIndex,
+          () => (deps.getTerminalWidth ?? defaultGetTerminalWidth)(),
         );
         return;
       }

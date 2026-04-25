@@ -8,7 +8,7 @@ import type {
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
 import { Key } from "@mariozechner/pi-tui";
-import yankedExtension from "./index.ts";
+import yankedExtension, { createYankedListView } from "./index.ts";
 import type { YankedDeps } from "./index.ts";
 import { createFileStore } from "./store.ts";
 import type { StoreIO, YankedPrompt } from "./store.ts";
@@ -39,7 +39,9 @@ interface PiHarness {
   /** Hook to throw or otherwise intercept setEditorText. */
   onSetEditorText: { fn?: (text: string) => void };
   notify: ReturnType<typeof vi.fn>;
-  select: ReturnType<typeof vi.fn>;
+  pickIndex: ReturnType<
+    typeof vi.fn<(items: string[]) => Promise<number | undefined>>
+  >;
   notifyCalls: () => NotifyCall[];
   invokeShortcut: (key: string) => Promise<void>;
   invokeCommand: (name: string, args?: string) => Promise<void>;
@@ -51,8 +53,7 @@ function createPiHarness(): PiHarness {
   const shortcuts = new Map<string, RegisteredShortcut>();
   const editor = { text: "" };
   const notify = vi.fn<(msg: string, level?: NotifyCall["level"]) => void>();
-  const select =
-    vi.fn<(title: string, items: string[]) => Promise<string | undefined>>();
+  const pickIndex = vi.fn<(items: string[]) => Promise<number | undefined>>();
 
   const onSetEditorText: { fn?: (text: string) => void } = {};
   const ui = {
@@ -63,7 +64,6 @@ function createPiHarness(): PiHarness {
     },
     notify: (msg: string, level?: NotifyCall["level"]) =>
       notify(msg, level ?? "info"),
-    select: (title: string, items: string[]) => select(title, items),
   } as unknown as ExtensionContext["ui"];
 
   const ctx = { ui } as unknown as ExtensionCommandContext;
@@ -84,7 +84,7 @@ function createPiHarness(): PiHarness {
     editor,
     onSetEditorText,
     notify,
-    select,
+    pickIndex,
     notifyCalls: () =>
       notify.mock.calls.map(([message, level]) => ({
         message,
@@ -117,6 +117,8 @@ interface SetupOptions {
   copy?: (text: string) => void;
   /** Pre-seed the on-disk store before the extension reads it. */
   initial?: YankedPrompt[];
+  /** Override the reported terminal width used to format list items. */
+  terminalWidth?: number;
 }
 
 /**
@@ -140,9 +142,19 @@ function setUpHarness(options: SetupOptions = {}) {
   const copy = options.copy ?? vi.fn();
   // Failure-injection tests pass an explicit StoreIO. Everything else uses
   // a real file-backed store rooted at the temp directory.
-  const deps: YankedDeps = options.store
+  const baseDeps: YankedDeps = options.store
     ? { store: options.store, copyToClipboard: copy }
     : { storePath: tempDir, copyToClipboard: copy };
+  const withWidth: YankedDeps =
+    options.terminalWidth !== undefined
+      ? { ...baseDeps, getTerminalWidth: () => options.terminalWidth! }
+      : baseDeps;
+  // Tests inject the index picker directly so we never have to render a real
+  // TUI selector — they just resolve the mock with a display index.
+  const deps: YankedDeps = {
+    ...withWidth,
+    pickIndex: (items: string[]) => harness.pickIndex(items),
+  };
   yankedExtension(harness.pi, deps);
 
   // Reads from `harness.store` should reflect what the extension is actually
@@ -448,7 +460,7 @@ describe("/yanked list", () => {
     expect(harness.notifyCalls()).toEqual([
       { message: "No yanked prompts stored", level: "warning" },
     ]);
-    expect(harness.select).not.toHaveBeenCalled();
+    expect(harness.pickIndex).not.toHaveBeenCalled();
   });
 
   it("shows the most recently yanked prompt first", async () => {
@@ -457,52 +469,102 @@ describe("/yanked list", () => {
     await harness.invokeShortcut(yankShortcutKey);
     harness.editor.text = "beta";
     await harness.invokeShortcut(yankShortcutKey);
-    harness.select.mockResolvedValue(undefined);
+    harness.pickIndex.mockResolvedValue(undefined);
 
     await harness.invokeCommand("yanked", "list");
 
-    expect(harness.select).toHaveBeenCalledWith(
-      "Yanked prompts (Enter to pop)",
-      ["1. beta", "2. alpha"],
+    expect(harness.pickIndex).toHaveBeenCalledWith(["1. beta", "2. alpha"]);
+  });
+
+  it("preserves newlines and indents continuation lines under the number gutter", async () => {
+    using harness = setUpHarness({
+      initial: [{ text: "line1\nline2\nline3", timestamp: 1 }],
+      terminalWidth: 200,
+    });
+    harness.pickIndex.mockResolvedValue(undefined);
+
+    await harness.invokeCommand("yanked", "list");
+
+    const items = harness.pickIndex.mock.calls[0][0];
+    // Continuations are indented by 3 spaces — the visible width of "1. " —
+    // so they line up under the prompt text. The view itself prepends a
+    // 2-column cursor prefix ("▸ "/"  ") to every rendered line so the
+    // first-line gutter and continuation indent stay aligned visually.
+    expect(items[0]).toBe("1. line1\n   line2\n   line3");
+  });
+
+  it("wraps long single-line prompts with a hanging indent at the number gutter", async () => {
+    // Available content width = terminalWidth - 2 (Text paddingX)
+    //   - 2 (cursor prefix) - 3 ("1. " gutter) = 8 here.
+    using harness = setUpHarness({
+      initial: [{ text: "abcdefgh12345678WXYZ", timestamp: 1 }],
+      terminalWidth: 15,
+    });
+    harness.pickIndex.mockResolvedValue(undefined);
+
+    await harness.invokeCommand("yanked", "list");
+
+    const items = harness.pickIndex.mock.calls[0][0];
+    const lines = items[0].split("\n");
+    // First line has the "N. " prefix, continuations are indented by 3 spaces.
+    expect(lines[0]).toBe("1. abcdefgh");
+    for (const cont of lines.slice(1)) {
+      expect(cont.startsWith("   ")).toBe(true);
+    }
+    // Reassembling the unindented content should give the original prompt.
+    const rejoined =
+      lines[0].slice("1. ".length) +
+      lines
+        .slice(1)
+        .map((l) => l.slice(3))
+        .join("");
+    expect(rejoined).toBe("abcdefgh12345678WXYZ");
+  });
+
+  it("truncates the displayed item to 5 lines, replacing the last with [N more lines]", async () => {
+    const text = ["a", "b", "c", "d", "e", "f", "g", "h"].join("\n");
+    using harness = setUpHarness({
+      initial: [{ text, timestamp: 1 }],
+      terminalWidth: 200,
+    });
+    harness.pickIndex.mockResolvedValue(undefined);
+
+    await harness.invokeCommand("yanked", "list");
+
+    const items = harness.pickIndex.mock.calls[0][0];
+    const lines = items[0].split("\n");
+    // Exactly 5 visible lines, last one is the "[N more lines]" indicator.
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toBe("1. a");
+    expect(lines[1]).toBe("   b");
+    expect(lines[2]).toBe("   c");
+    expect(lines[3]).toBe("   d");
+    // 8 input lines, 4 shown so far — 4 hidden.
+    expect(lines[4]).toBe("   [4 more lines]");
+  });
+
+  it("does not truncate or indent the prompt when popping it into the editor", async () => {
+    const text = ["line1", "line2", "line3", "line4", "line5", "line6"].join(
+      "\n",
     );
-  });
-
-  it("passes the full prompt text to select so the TUI can use the full width", async () => {
-    // The extension should not pre-truncate items — the underlying TUI
-    // SelectList wraps/truncates based on actual terminal width. Pre-truncating
-    // here causes items to be cut off prematurely (well below the available width).
-    const longText = "a".repeat(500);
     using harness = setUpHarness({
-      initial: [{ text: longText, timestamp: 1 }],
+      initial: [{ text, timestamp: 1 }],
+      terminalWidth: 15,
     });
-    harness.select.mockResolvedValue(undefined);
+    // The displayed item is multi-line; user selects the first one.
+    harness.pickIndex.mockResolvedValue(0);
 
     await harness.invokeCommand("yanked", "list");
 
-    const items = harness.select.mock.calls[0][1];
-    // Item should contain the full prompt text (plus the "1. " prefix).
-    expect(items[0]).toBe(`1. ${longText}`);
-    expect(items[0]).not.toContain("...");
-  });
-
-  it("replaces newlines with ↵ in the displayed items", async () => {
-    using harness = setUpHarness({
-      initial: [{ text: "line1\nline2", timestamp: 1 }],
-    });
-    harness.select.mockResolvedValue(undefined);
-
-    await harness.invokeCommand("yanked", "list");
-
-    const items = harness.select.mock.calls[0][1];
-    expect(items[0]).toContain("↵");
-    expect(items[0]).not.toContain("\n");
+    // The original prompt is restored verbatim — no indentation, no truncation.
+    expect(harness.editor.text).toBe(text);
   });
 
   it("does nothing when the user cancels the selection", async () => {
     using harness = setUpHarness({
       initial: [{ text: "alpha", timestamp: 1 }],
     });
-    harness.select.mockResolvedValue(undefined);
+    harness.pickIndex.mockResolvedValue(undefined);
 
     await harness.invokeCommand("yanked", "list");
 
@@ -519,8 +581,9 @@ describe("/yanked list", () => {
         { text: "gamma", timestamp: 3 },
       ],
     });
-    // Items shown: ["1. gamma", "2. beta", "3. alpha"] — user picks beta.
-    harness.select.mockResolvedValue("2. beta");
+    // Items shown: ["1. gamma", "2. beta", "3. alpha"] — user picks beta
+    // (display index 1).
+    harness.pickIndex.mockResolvedValue(1);
 
     await harness.invokeCommand("yanked", "list");
 
@@ -538,8 +601,8 @@ describe("/yanked list", () => {
         { text: "beta", timestamp: 2 },
       ],
     });
-    // User picks the most-recent prompt.
-    harness.select.mockResolvedValue("1. beta");
+    // User picks the most-recent prompt (display index 0).
+    harness.pickIndex.mockResolvedValue(0);
     // Make setEditorText fail — only after the prompt has been removed.
     harness.onSetEditorText.fn = () => {
       throw new Error("editor broke");
@@ -572,7 +635,7 @@ describe("/yanked list", () => {
       },
     };
     using harness = setUpHarness({ store });
-    harness.select.mockResolvedValue("1. alpha");
+    harness.pickIndex.mockResolvedValue(0);
     harness.onSetEditorText.fn = () => {
       throw new Error("editor broke");
     };
@@ -591,9 +654,9 @@ describe("/yanked list", () => {
     using harness = setUpHarness({
       initial: [{ text: "alpha", timestamp: 1 }],
     });
-    // The dialog returns a display index that's out of range — e.g. the user
+    // The selector returns a display index that's out of range — e.g. the user
     // somehow selects an item that's been removed concurrently.
-    harness.select.mockResolvedValue("5. ghost");
+    harness.pickIndex.mockResolvedValue(99);
 
     await harness.invokeCommand("yanked", "list");
 
@@ -605,27 +668,14 @@ describe("/yanked list", () => {
     expect(harness.store.read()).toHaveLength(1);
   });
 
-  it("silently does nothing when the selected item has no leading number", async () => {
-    using harness = setUpHarness({
-      initial: [{ text: "alpha", timestamp: 1 }],
-    });
-    harness.select.mockResolvedValue("not a numbered item");
-
-    await harness.invokeCommand("yanked", "list");
-
-    expect(harness.editor.text).toBe("");
-    expect(harness.notify).not.toHaveBeenCalled();
-    expect(harness.store.read()).toHaveLength(1);
-  });
-
   it("refuses to pop and preserves the prompt when editor was filled while the dialog was open", async () => {
     using harness = setUpHarness({
       initial: [{ text: "alpha", timestamp: 1 }],
     });
-    harness.select.mockImplementation(async () => {
+    harness.pickIndex.mockImplementation(async () => {
       // Simulate the user typing while the dialog is open.
       harness.editor.text = "typed something";
-      return "1. alpha";
+      return 0;
     });
 
     await harness.invokeCommand("yanked", "list");
@@ -636,6 +686,90 @@ describe("/yanked list", () => {
     expect(calls[0].message).toContain("editor is not empty");
     expect(harness.editor.text).toBe("typed something");
     expect(harness.store.read()).toHaveLength(1);
+  });
+});
+
+describe("createYankedListView", () => {
+  /** Stub theme — the view never inspects styled output, only state. */
+  const theme = {
+    fg: (_color: "accent" | "dim" | "text", text: string) => text,
+    bold: (text: string) => text,
+  };
+
+  function makeView(items: string[]) {
+    const requestRender = vi.fn();
+    const tui = { requestRender };
+    const done = vi.fn<(value: number | undefined) => void>();
+    const view = createYankedListView(tui, theme, items, done);
+    return { view, done, requestRender };
+  }
+
+  it("resolves with the current cursor index when Enter is pressed", () => {
+    const { view, done } = makeView(["1. a", "2. b", "3. c"]);
+
+    view.handleInput?.("\r");
+
+    expect(done).toHaveBeenCalledWith(0);
+  });
+
+  it("renders a ▸ cursor next to the selected item and ‘ ’ next to the others", () => {
+    const { view } = makeView(["1. a", "2. b\n   wrap", "3. c"]);
+
+    // Move the cursor to item index 1 (the multi-line one).
+    view.handleInput?.("\x1b[B");
+
+    const rendered = view.render(80);
+    // Text pads each line out to the full width with leading paddingX and
+    // trailing right-pad. Strip both so we can assert on item content alone.
+    const lines = rendered.map((l) => l.replace(/^ /, "").replace(/ +$/, ""));
+
+    // First two rendered lines are the title + legend (we don’t assert them
+    // — they’re static config). After the blank separator, the items begin.
+    const firstItemLine = lines.findIndex((l) => l.endsWith("1. a"));
+    expect(firstItemLine).toBeGreaterThan(-1);
+
+    expect(lines[firstItemLine]).toBe("  1. a"); // not selected
+    expect(lines[firstItemLine + 1]).toBe("▸ 2. b"); // selected first line
+    expect(lines[firstItemLine + 2]).toBe("     wrap"); // selected continuation, no ▸
+    expect(lines[firstItemLine + 3]).toBe("  3. c"); // not selected
+  });
+
+  it("advances the cursor on Down arrow and resolves with the new index", () => {
+    const { view, done, requestRender } = makeView(["1. a", "2. b", "3. c"]);
+
+    view.handleInput?.("\x1b[B"); // down
+    view.handleInput?.("\x1b[B"); // down again
+    expect(requestRender).toHaveBeenCalledTimes(2);
+
+    view.handleInput?.("\r");
+    expect(done).toHaveBeenCalledWith(2);
+  });
+
+  it("wraps the cursor from the top to the bottom on Up arrow", () => {
+    const { view, done } = makeView(["1. a", "2. b", "3. c"]);
+
+    view.handleInput?.("\x1b[A"); // up from index 0
+    view.handleInput?.("\r");
+
+    expect(done).toHaveBeenCalledWith(2);
+  });
+
+  it("wraps the cursor from the bottom to the top on Down arrow", () => {
+    const { view, done } = makeView(["1. a", "2. b"]);
+
+    view.handleInput?.("\x1b[B"); // down to index 1
+    view.handleInput?.("\x1b[B"); // wrap back to index 0
+    view.handleInput?.("\r");
+
+    expect(done).toHaveBeenCalledWith(0);
+  });
+
+  it("resolves with undefined when Escape is pressed", () => {
+    const { view, done } = makeView(["1. a", "2. b"]);
+
+    view.handleInput?.("\x1b");
+
+    expect(done).toHaveBeenCalledWith(undefined);
   });
 });
 
