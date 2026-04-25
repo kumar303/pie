@@ -40,7 +40,11 @@ interface PiHarness {
   onSetEditorText: { fn?: (text: string) => void };
   notify: ReturnType<typeof vi.fn>;
   pickIndex: ReturnType<
-    typeof vi.fn<(items: string[]) => Promise<number | undefined>>
+    typeof vi.fn<
+      (
+        items: string[],
+      ) => Promise<{ index: number; action: "pop" | "peek" } | undefined>
+    >
   >;
   notifyCalls: () => NotifyCall[];
   invokeShortcut: (key: string) => Promise<void>;
@@ -53,7 +57,12 @@ function createPiHarness(): PiHarness {
   const shortcuts = new Map<string, RegisteredShortcut>();
   const editor = { text: "" };
   const notify = vi.fn<(msg: string, level?: NotifyCall["level"]) => void>();
-  const pickIndex = vi.fn<(items: string[]) => Promise<number | undefined>>();
+  const pickIndex =
+    vi.fn<
+      (
+        items: string[],
+      ) => Promise<{ index: number; action: "pop" | "peek" } | undefined>
+    >();
 
   const onSetEditorText: { fn?: (text: string) => void } = {};
   const ui = {
@@ -552,7 +561,7 @@ describe("/yanked list", () => {
       terminalWidth: 15,
     });
     // The displayed item is multi-line; user selects the first one.
-    harness.pickIndex.mockResolvedValue(0);
+    harness.pickIndex.mockResolvedValue({ index: 0, action: "pop" });
 
     await harness.invokeCommand("yanked", "list");
 
@@ -583,7 +592,7 @@ describe("/yanked list", () => {
     });
     // Items shown: ["1. gamma", "2. beta", "3. alpha"] — user picks beta
     // (display index 1).
-    harness.pickIndex.mockResolvedValue(1);
+    harness.pickIndex.mockResolvedValue({ index: 1, action: "pop" });
 
     await harness.invokeCommand("yanked", "list");
 
@@ -602,7 +611,7 @@ describe("/yanked list", () => {
       ],
     });
     // User picks the most-recent prompt (display index 0).
-    harness.pickIndex.mockResolvedValue(0);
+    harness.pickIndex.mockResolvedValue({ index: 0, action: "pop" });
     // Make setEditorText fail — only after the prompt has been removed.
     harness.onSetEditorText.fn = () => {
       throw new Error("editor broke");
@@ -635,7 +644,7 @@ describe("/yanked list", () => {
       },
     };
     using harness = setUpHarness({ store });
-    harness.pickIndex.mockResolvedValue(0);
+    harness.pickIndex.mockResolvedValue({ index: 0, action: "pop" });
     harness.onSetEditorText.fn = () => {
       throw new Error("editor broke");
     };
@@ -656,7 +665,7 @@ describe("/yanked list", () => {
     });
     // The selector returns a display index that's out of range — e.g. the user
     // somehow selects an item that's been removed concurrently.
-    harness.pickIndex.mockResolvedValue(99);
+    harness.pickIndex.mockResolvedValue({ index: 99, action: "pop" });
 
     await harness.invokeCommand("yanked", "list");
 
@@ -668,6 +677,50 @@ describe("/yanked list", () => {
     expect(harness.store.read()).toHaveLength(1);
   });
 
+  it("peeks the selected prompt into the editor without removing it from the store", async () => {
+    using harness = setUpHarness({
+      initial: [
+        { text: "alpha", timestamp: 1 },
+        { text: "beta", timestamp: 2 },
+        { text: "gamma", timestamp: 3 },
+      ],
+    });
+    // Items shown: ["1. gamma", "2. beta", "3. alpha"] — user peeks at beta.
+    harness.pickIndex.mockResolvedValue({ index: 1, action: "peek" });
+
+    await harness.invokeCommand("yanked", "list");
+
+    expect(harness.editor.text).toBe("beta");
+    // Store is untouched — all three prompts remain.
+    expect(harness.store.read().map((p) => p.text)).toEqual([
+      "alpha",
+      "beta",
+      "gamma",
+    ]);
+    expect(harness.notifyCalls()).toEqual([
+      { message: "Peeked yanked prompt into editor", level: "info" },
+    ]);
+  });
+
+  it("refuses to peek and preserves the prompt when editor was filled while the dialog was open", async () => {
+    using harness = setUpHarness({
+      initial: [{ text: "alpha", timestamp: 1 }],
+    });
+    harness.pickIndex.mockImplementation(async () => {
+      harness.editor.text = "typed something";
+      return { index: 0, action: "peek" };
+    });
+
+    await harness.invokeCommand("yanked", "list");
+
+    const calls = harness.notifyCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].level).toBe("error");
+    expect(calls[0].message).toContain("editor is not empty");
+    expect(harness.editor.text).toBe("typed something");
+    expect(harness.store.read()).toHaveLength(1);
+  });
+
   it("refuses to pop and preserves the prompt when editor was filled while the dialog was open", async () => {
     using harness = setUpHarness({
       initial: [{ text: "alpha", timestamp: 1 }],
@@ -675,7 +728,7 @@ describe("/yanked list", () => {
     harness.pickIndex.mockImplementation(async () => {
       // Simulate the user typing while the dialog is open.
       harness.editor.text = "typed something";
-      return 0;
+      return { index: 0, action: "pop" };
     });
 
     await harness.invokeCommand("yanked", "list");
@@ -699,17 +752,47 @@ describe("createYankedListView", () => {
   function makeView(items: string[]) {
     const requestRender = vi.fn();
     const tui = { requestRender };
-    const done = vi.fn<(value: number | undefined) => void>();
+    const done =
+      vi.fn<
+        (value: { index: number; action: "pop" | "peek" } | undefined) => void
+      >();
     const view = createYankedListView(tui, theme, items, done);
     return { view, done, requestRender };
   }
 
-  it("resolves with the current cursor index when Enter is pressed", () => {
+  it("resolves with a pop action at the current cursor index when Enter is pressed", () => {
     const { view, done } = makeView(["1. a", "2. b", "3. c"]);
 
     view.handleInput?.("\r");
 
-    expect(done).toHaveBeenCalledWith(0);
+    expect(done).toHaveBeenCalledWith({ index: 0, action: "pop" });
+  });
+
+  it("resolves with a peek action at the current cursor index when 'p' is pressed", () => {
+    const { view, done } = makeView(["1. a", "2. b", "3. c"]);
+
+    view.handleInput?.("\x1b[B"); // move cursor to index 1
+    view.handleInput?.("p");
+
+    expect(done).toHaveBeenCalledWith({ index: 1, action: "peek" });
+  });
+
+  it("resolves with a peek action when 'p' arrives as a Kitty CSI-u sequence", () => {
+    const { view, done } = makeView(["1. a", "2. b"]);
+
+    // Under the Kitty keyboard protocol, plain 'p' is reported as CSI-u
+    // (codepoint 112 — "p"). The view must still recognize it.
+    view.handleInput?.("\x1b[112u");
+
+    expect(done).toHaveBeenCalledWith({ index: 0, action: "peek" });
+  });
+
+  it("includes a 'p peek' hint in the rendered legend", () => {
+    const { view } = makeView(["1. a"]);
+
+    const rendered = view.render(80).join("\n");
+
+    expect(rendered).toMatch(/p\s*peek/i);
   });
 
   it("renders a ▸ cursor next to the selected item and ‘ ’ next to the others", () => {
@@ -742,7 +825,7 @@ describe("createYankedListView", () => {
     expect(requestRender).toHaveBeenCalledTimes(2);
 
     view.handleInput?.("\r");
-    expect(done).toHaveBeenCalledWith(2);
+    expect(done).toHaveBeenCalledWith({ index: 2, action: "pop" });
   });
 
   it("wraps the cursor from the top to the bottom on Up arrow", () => {
@@ -751,7 +834,7 @@ describe("createYankedListView", () => {
     view.handleInput?.("\x1b[A"); // up from index 0
     view.handleInput?.("\r");
 
-    expect(done).toHaveBeenCalledWith(2);
+    expect(done).toHaveBeenCalledWith({ index: 2, action: "pop" });
   });
 
   it("wraps the cursor from the bottom to the top on Down arrow", () => {
@@ -761,7 +844,7 @@ describe("createYankedListView", () => {
     view.handleInput?.("\x1b[B"); // wrap back to index 0
     view.handleInput?.("\r");
 
-    expect(done).toHaveBeenCalledWith(0);
+    expect(done).toHaveBeenCalledWith({ index: 0, action: "pop" });
   });
 
   it("resolves with undefined when Escape is pressed", () => {

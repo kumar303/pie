@@ -53,7 +53,9 @@ export interface YankedDeps {
    * to bypass real TUI rendering; production uses a custom overlay built on
    * `ctx.ui.custom`.
    */
-  pickIndex?: (items: string[]) => Promise<number | undefined>;
+  pickIndex?: (
+    items: string[],
+  ) => Promise<{ index: number; action: "pop" | "peek" } | undefined>;
 }
 
 /** Maximum number of visible lines per item in the /yanked list view. */
@@ -204,7 +206,9 @@ async function handleList(
   getEditorText: () => string,
   setEditorText: (text: string) => void,
   notify: (msg: string, level: "info" | "warning" | "error") => void,
-  pickIndex: (items: string[]) => Promise<number | null | undefined>,
+  pickIndex: (
+    items: string[],
+  ) => Promise<{ index: number; action: "pop" | "peek" } | null | undefined>,
   getTerminalWidth: () => number,
 ): Promise<void> {
   const prompts = listPrompts(store);
@@ -220,17 +224,34 @@ async function handleList(
   const reversed = [...prompts].reverse();
   const items = reversed.map((p, i) => formatListItem(p.text, i + 1, width));
 
-  const displayIndex = await pickIndex(items);
-  if (displayIndex == null) return;
+  const result = await pickIndex(items);
+  if (result == null) return;
+  const { index: displayIndex, action } = result;
   // reversed[displayIndex] corresponds to prompts[prompts.length - 1 - displayIndex]
   const index = prompts.length - 1 - displayIndex;
 
   const currentText = getEditorText();
   if (currentText.trim()) {
     notify(
-      "Cannot pop — editor is not empty. Clear it first to avoid losing your current prompt.",
+      `Cannot ${action} — editor is not empty. Clear it first to avoid losing your current prompt.`,
       "error",
     );
+    return;
+  }
+
+  if (action === "peek") {
+    if (index < 0 || index >= prompts.length) {
+      notify("Failed to peek — prompt no longer exists", "error");
+      return;
+    }
+    const text = prompts[index].text;
+    try {
+      setEditorText(text);
+    } catch (err: any) {
+      notify(`Failed to fill editor: ${err.message}`, "error");
+      return;
+    }
+    notify("Peeked yanked prompt into editor", "info");
     return;
   }
 
@@ -281,13 +302,13 @@ export function createYankedListView(
   tui: { requestRender(): void },
   theme: ListViewTheme,
   items: string[],
-  done: (value: number | undefined) => void,
+  done: (value: { index: number; action: "pop" | "peek" } | undefined) => void,
 ): Component {
   let cursor = 0;
   const text = new Text("", 1, 0);
 
   const TITLE = "Yanked prompts";
-  const LEGEND = "↑/↓ navigate  Enter pop  Esc cancel";
+  const LEGEND = "↑/↓ navigate  Enter pop  p peek  Esc cancel";
 
   const rebuild = () => {
     const lines: string[] = [
@@ -322,7 +343,11 @@ export function createYankedListView(
         return;
       }
       if (matchesKey(data, Key.enter)) {
-        done(cursor);
+        done({ index: cursor, action: "pop" });
+        return;
+      }
+      if (matchesKey(data, "p")) {
+        done({ index: cursor, action: "peek" });
         return;
       }
       if (matchesKey(data, Key.up)) {
@@ -381,7 +406,9 @@ export default function (pi: ExtensionAPI, deps: YankedDeps = {}) {
         const pickIndex =
           deps.pickIndex ??
           ((items: string[]) =>
-            ctx.ui.custom<number | undefined>((tui, theme, _kb, done) =>
+            ctx.ui.custom<
+              { index: number; action: "pop" | "peek" } | undefined
+            >((tui, theme, _kb, done) =>
               createYankedListView(tui, theme, items, done),
             ));
         await handleList(
