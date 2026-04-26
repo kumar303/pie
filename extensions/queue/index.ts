@@ -423,9 +423,45 @@ export async function startQueue(
 
 // ── Extension entry point ────────────────────────────────────────────
 
+/**
+ * The narrow subset of `ExtensionAPI` this extension uses. Declared here
+ * (rather than in the tests) so that any drift between the real wiring
+ * and the test mock is caught at compile time: if queue starts using a
+ * new pi method, this type widens and any mock that doesn't implement
+ * it stops compiling.
+ */
+export type QueuePi = Pick<
+  ExtensionAPI,
+  "on" | "registerCommand" | "sendUserMessage"
+>;
+
+/**
+ * Optional dependency overrides for tests. Production callers should
+ * use the default export, which wires real implementations.
+ */
+export interface QueueExtensionOptions {
+  /**
+   * Override the prompt store. Tests pass a tmpdir-backed store so they
+   * never touch the user's real `~/.pi/agent/queue` directory.
+   */
+  store?: StoreIO;
+}
+
 export default function (pi: ExtensionAPI) {
+  return createExtension(pi);
+}
+
+/**
+ * Wire the queue extension to a pi API. Exposed for integration tests
+ * so they can drive the extension with a mock pi and inject a fake
+ * store.
+ */
+export function createExtension(
+  pi: QueuePi,
+  options: QueueExtensionOptions = {},
+) {
   let runner: QueueRunner | null = null;
-  const store = createFileStore();
+  const store = options.store ?? createFileStore();
 
   // We use agent_end because ctx.waitForIdle() seems broken.
   // Maybe this will fix it: https://github.com/badlogic/pi-mono/issues/2023
