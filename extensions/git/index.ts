@@ -1980,7 +1980,7 @@ export class GitComponent implements Component {
           truncateToWidth(
             theme.fg(
               this.resultIsError ? "error" : "text",
-              `  ${this.sanitizeLine(rl)}`,
+              `  ${sanitizeLine(rl)}`,
             ),
             width,
           ),
@@ -2078,7 +2078,7 @@ export class GitComponent implements Component {
       for (let i = this.diffScrollOffset; i < diffEnd; i++) {
         leftLines.push(
           truncateToWidth(
-            " " + this.sanitizeLine(this.activeDiffLines[i]),
+            " " + sanitizeLine(this.activeDiffLines[i]),
             diffPaneWidth,
           ),
         );
@@ -2204,11 +2204,6 @@ export class GitComponent implements Component {
     );
 
     return prompt + before + cursorChar + after + padding;
-  }
-
-  /** Replace tab characters with spaces to prevent terminal width miscounting. */
-  private sanitizeLine(line: string): string {
-    return line.replace(/\t/g, "  ");
   }
 
   private wrapText(text: string, maxWidth: number): string[] {
@@ -2705,7 +2700,26 @@ export class FilePathAutocompleteProvider implements AutocompleteProvider {
 
 // --- Extension entry point ---
 
-export default function (pi: ExtensionAPI) {
+/**
+ * Replace hard tabs with two spaces so visibleWidth math stays
+ * correct for the diff viewer (tabs render as variable widths in
+ * terminals; without normalization, lines overflow the pane).
+ * Exported for unit testing.
+ */
+export function sanitizeLine(line: string): string {
+  return line.replace(/\t/g, "  ");
+}
+
+/**
+ * The narrow subset of `ExtensionAPI` this extension uses. Declared here
+ * (rather than in tests) so any drift between the real wiring and a
+ * test mock is caught at compile time: if the extension starts using a
+ * new pi method, this type widens and any mock that doesn't implement
+ * it stops compiling.
+ */
+export type GitPi = Pick<ExtensionAPI, "registerCommand" | "sendUserMessage">;
+
+export default function (pi: GitPi) {
   pi.registerCommand("git", {
     description: "Interactive git file selector and command runner",
     handler: async (_args, ctx) => {
