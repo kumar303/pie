@@ -8,7 +8,7 @@
  * pi session directory. Uses a pub/sub service for instant status updates.
  */
 
-import { spawnSync } from "node:child_process";
+import { spawnSync as realSpawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import type {
   ExtensionAPI,
@@ -26,9 +26,47 @@ import {
   type DirEntry,
 } from "./store.js";
 import { BrainComponent } from "./brain.ts";
-import { ensureService, type Client, type PubSubMessage } from "./service.js";
+import {
+  ensureService as realEnsureService,
+  type Client,
+  type PubSubMessage,
+} from "./service.js";
+
+/**
+ * The narrow subset of `ExtensionAPI` this extension uses. Declared here
+ * (rather than in the tests) so that any drift between the real wiring
+ * and the test mock is caught at compile time: if brain starts using a
+ * new pi method, this type widens and any mock that doesn't implement
+ * it stops compiling.
+ */
+export type BrainPi = Pick<ExtensionAPI, "on" | "registerCommand">;
+
+/**
+ * Optional dependency overrides for tests. Production callers should use
+ * the default export, which wires real implementations.
+ */
+export interface BrainExtensionOptions {
+  /** Override the pub/sub service factory (used for tests). */
+  ensureService?: typeof realEnsureService;
+  /** Override spawnSync used by the editor opener (used for tests). */
+  spawnSync?: typeof realSpawnSync;
+}
 
 export default function (pi: ExtensionAPI) {
+  return createExtension(pi);
+}
+
+/**
+ * Wire the brain extension to a pi API. Exposed for integration tests so
+ * they can drive the extension with a mock pi and inject test doubles for
+ * the pub/sub service and the editor spawn.
+ */
+export function createExtension(
+  pi: BrainPi,
+  options: BrainExtensionOptions = {},
+) {
+  const ensureService = options.ensureService ?? realEnsureService;
+  const spawnSync = options.spawnSync ?? realSpawnSync;
   // ── Per-session state ───────────────────────────────────────────
 
   let sessionId: string | null = null;
@@ -211,7 +249,7 @@ export default function (pi: ExtensionAPI) {
             }
 
             // Open in $EDITOR
-            openInEditor(dir.dir, ctx);
+            openInEditor(dir.dir, ctx, spawnSync);
           },
           data,
           (sid: string) => readLog(sid),
@@ -260,7 +298,11 @@ export default function (pi: ExtensionAPI) {
 
 // ── Editor opening ────────────────────────────────────────────────
 
-function openInEditor(dir: string, ctx: ExtensionContext): void {
+function openInEditor(
+  dir: string,
+  ctx: ExtensionContext,
+  spawnSync: typeof realSpawnSync,
+): void {
   const editor = process.env.EDITOR || "vi";
   const absolutePath = resolve(dir);
 

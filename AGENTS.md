@@ -8,7 +8,7 @@ Pi extensions repo. Do not commit changes to git automatically.
 
 # Tenets
 
-- All tests must be written in an integration style: mock the pi API and simulate how the pi object interacts with the extension handler. Only import extension components and test them directly as a last resort.
+- All tests must be written in an integration style: mock the pi API and simulate how the pi object interacts with the extension handler. Fire pi lifecycle events from the pi object and fire user key presses from the ctx.ui object. Only import extension components and test them directly as a last resort.
 - All tests must pass: run `pnpm test` after changes and fix errors
 - All code must compile: run `pnpm run typecheck` and fix any errors
 - All code must pass linting: run `pnpm run lint` and fix any errors
@@ -17,8 +17,11 @@ Pi extensions repo. Do not commit changes to git automatically.
 - Update the README table when adding extensions
 - Peer deps (`@mariozechner/pi-coding-agent`, `@mariozechner/pi-tui`, `@sinclair/typebox`): use `import type`, never bundle
 - Never catch and ignore errors unless they are expected; report all caught errors in a log or in the UI.
+- Use rg instead of grep
 
 # TDD guidelines
 
 - always write a failing test before fixing a bug or implementing a new feature
 - do not add tests for static configuration such as UI layout that is not dynamic
+- only add regression tests for bug fixes
+- if you're making an intentional behavioral change, you don't need to assert that the old behavior no longer exists
