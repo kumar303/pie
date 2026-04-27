@@ -21,6 +21,7 @@ All code is licensed under [WTFPL](LICENSE).
 | [queue](extensions/queue/)                                   | Send your agent a list of prompts, one at a time. Invoke with `/queue <key>`.                                              |
 | [update-pr-description](extensions/update-pr-description/)   | Rewrite your PR description to reflect the latest branch changes. Invoke with `/update-pr-description`.                    |
 | [vs-code-but-chill](extensions/vs-code-but-chill/)           | Restart language servers when they eat too much memory.                                                                    |
+| [worktree](extensions/worktree/)                             | Manage git worktrees. Invoke with `/worktree`.                                                                             |
 | [yanked](extensions/yanked/)                                 | Yank (save) the current prompt for later.                                                                                  |
 
 ## Install
