@@ -6,8 +6,8 @@
  * Scope is intentionally small: the extension uses IPC to (1) keep
  * the server alive while any pi session is attached, (2) ask for an
  * immediate `reap`, (3) ask for a graceful `stop`, and (4) receive
- * `killed` notifications. Everything observable (logs, status) is
- * read from the on-disk log file instead of streamed.
+ * `killed` event notifications. Everything observable (logs, status)
+ * is read from the on-disk log file instead of streamed.
  */
 
 export type ProcessKind = "tsserver" | "eslint";
@@ -42,8 +42,8 @@ export interface PongResponse {
 }
 
 /**
- * Broadcast when the server kills a monitored process. Every
- * connected client receives every kill — there's no opt-in; the
+ * Broadcast when the server stops a monitored process. Every
+ * connected client receives every stop — there's no opt-in; the
  * extension uses it to surface a UI toast.
  */
 export interface KilledEvent {
@@ -58,8 +58,8 @@ export interface KilledEvent {
 /**
  * Response to a `reap` request. `ok` indicates whether the tick ran
  * to completion; `killed` is the number of processes that were
- * killed during this tick (0 is a valid success case and the
- * trigger for the "nothing to kill" UI notification).
+ * stopped during this tick (0 is a valid success case and the
+ * trigger for the "nothing to stop" UI notification).
  */
 export interface ReapResponse {
   type: "reap";

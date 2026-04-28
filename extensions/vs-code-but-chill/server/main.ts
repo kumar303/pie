@@ -151,7 +151,7 @@ async function main(dataDir: string): Promise<void> {
       const result = await safeTick();
       log.write(
         result.ok
-          ? `reap done killed=${result.killed}`
+          ? `reap done stopped=${result.killed}`
           : `reap failed: ${result.error}`,
       );
       return result;
@@ -175,7 +175,7 @@ async function main(dataDir: string): Promise<void> {
           );
           if (!found) {
             log.write(
-              `WARN no respawn detected 10s after killing pid=${killedPid} workspace=${workspaceHash}`,
+              `WARN no respawn detected 10s after stopping pid=${killedPid} workspace=${workspaceHash}`,
             );
           }
         } catch (err) {
@@ -208,7 +208,7 @@ async function main(dataDir: string): Promise<void> {
       emit: (ev) => {
         ipc.broadcastKilled(ev);
         log.write(
-          `killed ${ev.kind} pid=${ev.pid} workspace=${ev.workspacePath ?? ev.workspace ?? "?"} reason=${ev.reason}`,
+          `stopped ${ev.kind} pid=${ev.pid} workspace=${ev.workspacePath ?? ev.workspace ?? "?"} reason=${ev.reason}`,
         );
       },
       log: (msg) => log.write(msg),

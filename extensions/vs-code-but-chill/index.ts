@@ -102,7 +102,7 @@ export default function (pi: ExtensionAPI) {
           const where = msg.workspacePath ?? msg.workspace ?? "<unknown>";
           const label = msg.kind === "eslint" ? "eslintServer" : "tsserver";
           notify?.(
-            `/vs-code-but-chill: killed idle ${label} in ${where}`,
+            `/vs-code-but-chill: stopped idle ${label} in ${where}`,
             "info",
           );
         },
@@ -239,12 +239,12 @@ export default function (pi: ExtensionAPI) {
           }
           if (result.killed === 0) {
             ctx.ui.notify(
-              "/vs-code-but-chill: reap ran — nothing to kill",
+              "/vs-code-but-chill: reap ran — nothing to stop",
               "info",
             );
           } else {
             ctx.ui.notify(
-              `/vs-code-but-chill: reap killed ${result.killed} process${
+              `/vs-code-but-chill: reap stopped ${result.killed} process${
                 result.killed === 1 ? "" : "es"
               }`,
               "info",

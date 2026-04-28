@@ -352,7 +352,7 @@ describe("vs-code-but-chill extension", () => {
     expect(elapsed).toBeLessThan(500);
   });
 
-  it("shows killed-event notifications with workspacePath when available", async () => {
+  it("shows stopped notifications with workspacePath when available", async () => {
     const expectedDir = join(dataDir, ".cache", "vs-code-but-chill_pi");
     const { mkdirSync } = await import("node:fs");
     mkdirSync(expectedDir, { recursive: true });
@@ -377,7 +377,7 @@ describe("vs-code-but-chill extension", () => {
     await notified;
 
     const msg = pi.ctx.notifications.find((n) => /my-project/.test(n.message))!;
-    expect(msg.message).toMatch(/killed idle tsserver/);
+    expect(msg.message).toMatch(/stopped idle tsserver/);
   });
 
   it("falls back to workspace hash when workspacePath is unknown", async () => {
@@ -435,7 +435,7 @@ describe("vs-code-but-chill extension", () => {
       expect(newNotifs.filter((n) => n.type !== "info")).toHaveLength(0);
     });
 
-    it("reports a kill count when the reap killed processes", async () => {
+    it("reports a stopped count when the reap stopped processes", async () => {
       const expectedDir = join(dataDir, ".cache", "vs-code-but-chill_pi");
       const { mkdirSync } = await import("node:fs");
       mkdirSync(expectedDir, { recursive: true });
@@ -455,11 +455,11 @@ describe("vs-code-but-chill extension", () => {
       await new Promise((r) => setTimeout(r, 50));
 
       const newNotifs = pi.ctx.notifications.slice(notifCountBefore);
-      // Success notification references the number of kills. Actual
-      // per-kill notifications still come from the existing `killed`
+      // Success notification references the number of stopped processes. Actual
+      // per-process notifications still come from the existing `killed`
       // event path.
       const success = newNotifs.find((n) =>
-        /killed.*2|2.*killed|killed 2/i.test(n.message),
+        /stopped.*2|2.*stopped|stopped 2/i.test(n.message),
       );
       expect(success).toBeDefined();
     });
@@ -524,7 +524,7 @@ describe("vs-code-but-chill extension", () => {
       expect(wrongWarning).toBeUndefined();
       // And the reap success notification should have arrived.
       const success = pi.ctx.notifications.find(
-        (n) => n.type === "info" && /nothing to kill/i.test(n.message),
+        (n) => n.type === "info" && /nothing to stop/i.test(n.message),
       );
       expect(success).toBeDefined();
     });
