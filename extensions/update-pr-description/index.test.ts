@@ -4,6 +4,9 @@ import {
   createExtension,
   type UpdatePrDeps,
   type MockUi,
+  type CustomOptions,
+  type DiffViewerTheme,
+  type DiffViewerTui,
 } from "./index.js";
 
 // ── URL parsing ──────────────────────────────────────────────────────
@@ -99,6 +102,8 @@ interface MockUiExtras {
   notifications: Array<{ msg: string; level: string }>;
   confirmAnswer: boolean;
   nextCustomResult: unknown;
+  lastCustomFactory: unknown;
+  lastCustomOptions: CustomOptions | undefined;
 }
 
 function makeMockUi(): MockUi & MockUiExtras {
@@ -106,13 +111,17 @@ function makeMockUi(): MockUi & MockUiExtras {
     notifications: [] as Array<{ msg: string; level: string }>,
     confirmAnswer: true,
     nextCustomResult: undefined as unknown,
+    lastCustomFactory: undefined as unknown,
+    lastCustomOptions: undefined as CustomOptions | undefined,
     notify(msg: string, level: string) {
       ui.notifications.push({ msg, level });
     },
     async confirm(_title: string, _body?: string) {
       return ui.confirmAnswer;
     },
-    async custom<T>(_fn: unknown): Promise<T> {
+    async custom<T>(fn: unknown, options?: CustomOptions): Promise<T> {
+      ui.lastCustomFactory = fn;
+      ui.lastCustomOptions = options;
       return ui.nextCustomResult as T;
     },
   };
@@ -255,7 +264,7 @@ describe("command handler", () => {
       ui,
       cwd: "/work",
       hasUI: true,
-    } as unknown);
+    });
   }
 
   function respondBody(body: string) {
@@ -299,7 +308,7 @@ describe("command handler", () => {
     expect(paths.some((p) => p.endsWith("/original.md"))).toBe(true);
     expect(paths.some((p) => p.endsWith("/current.md"))).toBe(true);
     for (const p of paths) {
-      expect(deps.files.get(p)).toBe("Original PR body");
+      expect(deps.files.get(p)).toBe("Original PR body\n");
     }
   });
 
@@ -422,7 +431,7 @@ describe("update_pr_description tool", () => {
       ui,
       cwd: "/work",
       hasUI: true,
-    } as unknown);
+    });
   }
 
   function getTool() {
@@ -434,7 +443,7 @@ describe("update_pr_description tool", () => {
     await expect(
       tool.execute("id1", { new_content: "x" }, undefined, undefined, {
         ui,
-      } as unknown),
+      }),
     ).rejects.toThrow(/no active/i);
   });
 
@@ -443,6 +452,7 @@ describe("update_pr_description tool", () => {
     ui.confirmAnswer = true;
     ui.nextCustomResult = true;
     deps.execResponders.push((cmd) => {
+      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
       if (cmd === "delta") return { stdout: "diff output" };
       if (cmd === "pbcopy") return { stdout: "" };
       return undefined;
@@ -453,20 +463,21 @@ describe("update_pr_description tool", () => {
       { new_content: "Updated PR body" },
       undefined,
       undefined,
-      { ui } as unknown,
+      { ui },
     );
     const currentPath = Array.from(deps.files.keys()).find((p) =>
       p.endsWith("/current.md"),
     )!;
-    expect(deps.files.get(currentPath)).toBe("Updated PR body");
+    expect(deps.files.get(currentPath)).toBe("Updated PR body\n");
   });
 
-  it("runs delta against original and current", async () => {
+  it("runs diff and delta against original and current", async () => {
     await startSession();
     ui.confirmAnswer = true;
     ui.nextCustomResult = true;
     deps.execResponders.push((cmd) => {
-      if (cmd === "delta") return { stdout: "diff output" };
+      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
+      if (cmd === "delta") return { stdout: "colored diff" };
       if (cmd === "pbcopy") return { stdout: "" };
       return undefined;
     });
@@ -476,18 +487,22 @@ describe("update_pr_description tool", () => {
       { new_content: "Updated" },
       undefined,
       undefined,
-      { ui } as unknown,
+      { ui },
     );
+    const diffCall = deps.execCalls.find((c) => c.cmd === "diff");
+    expect(diffCall).toBeDefined();
+    expect(diffCall!.args.some((a) => a.endsWith("/original.md"))).toBe(true);
+    expect(diffCall!.args.some((a) => a.endsWith("/current.md"))).toBe(true);
     const deltaCall = deps.execCalls.find((c) => c.cmd === "delta");
     expect(deltaCall).toBeDefined();
-    expect(deltaCall!.args.some((a) => a.endsWith("/original.md"))).toBe(true);
-    expect(deltaCall!.args.some((a) => a.endsWith("/current.md"))).toBe(true);
+    expect(deltaCall!.input).toBe("unified diff");
   });
 
   it("copies current.md to clipboard when user confirms", async () => {
     await startSession();
     ui.nextCustomResult = true;
     deps.execResponders.push((cmd) => {
+      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
       if (cmd === "delta") return { stdout: "diff output" };
       if (cmd === "pbcopy") return { stdout: "" };
       return undefined;
@@ -498,11 +513,11 @@ describe("update_pr_description tool", () => {
       { new_content: "Final body" },
       undefined,
       undefined,
-      { ui } as unknown,
+      { ui },
     );
     const pbcopyCall = deps.execCalls.find((c) => c.cmd === "pbcopy");
     expect(pbcopyCall).toBeDefined();
-    expect(pbcopyCall!.input).toBe("Final body");
+    expect(pbcopyCall!.input).toBe("Final body\n");
     expect(result.content[0]!.text.toLowerCase()).toContain("clipboard");
   });
 
@@ -515,6 +530,7 @@ describe("update_pr_description tool", () => {
     };
     ui.confirmAnswer = true; // would mask the error if fallback kicked in
     deps.execResponders.push((cmd) => {
+      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
       if (cmd === "delta") return { stdout: "diff output" };
       if (cmd === "pbcopy") return { stdout: "" };
       return undefined;
@@ -523,7 +539,7 @@ describe("update_pr_description tool", () => {
     await expect(
       tool.execute("id1", { new_content: "x" }, undefined, undefined, {
         ui,
-      } as unknown),
+      }),
     ).rejects.toBe(boom);
     // And nothing was copied to the clipboard.
     expect(deps.execCalls.some((c) => c.cmd === "pbcopy")).toBe(false);
@@ -533,6 +549,7 @@ describe("update_pr_description tool", () => {
     await startSession();
     ui.nextCustomResult = false;
     deps.execResponders.push((cmd) => {
+      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
       if (cmd === "delta") return { stdout: "diff output" };
       if (cmd === "pbcopy") return { stdout: "" };
       return undefined;
@@ -543,7 +560,7 @@ describe("update_pr_description tool", () => {
       { new_content: "Final body" },
       undefined,
       undefined,
-      { ui } as unknown,
+      { ui },
     );
     expect(deps.execCalls.some((c) => c.cmd === "pbcopy")).toBe(false);
     // Should return a message telling the agent to wait for user feedback
@@ -556,6 +573,7 @@ describe("update_pr_description tool", () => {
     await startSession();
     ui.nextCustomResult = false;
     deps.execResponders.push((cmd) => {
+      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
       if (cmd === "delta") return { stdout: "diff output" };
       if (cmd === "pbcopy") return { stdout: "" };
       return undefined;
@@ -566,7 +584,7 @@ describe("update_pr_description tool", () => {
       { new_content: "First draft" },
       undefined,
       undefined,
-      { ui } as unknown,
+      { ui },
     );
     // Second iteration: user accepts this time
     ui.nextCustomResult = true;
@@ -575,12 +593,12 @@ describe("update_pr_description tool", () => {
       { new_content: "Second draft" },
       undefined,
       undefined,
-      { ui } as unknown,
+      { ui },
     );
     const currentPath = Array.from(deps.files.keys()).find((p) =>
       p.endsWith("/current.md"),
     )!;
-    expect(deps.files.get(currentPath)).toBe("Second draft");
+    expect(deps.files.get(currentPath)).toBe("Second draft\n");
     expect(deps.execCalls.filter((c) => c.cmd === "pbcopy")).toHaveLength(1);
   });
 
@@ -588,6 +606,7 @@ describe("update_pr_description tool", () => {
     await startSession();
     ui.nextCustomResult = true;
     deps.execResponders.push((cmd) => {
+      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
       if (cmd === "delta") return { stdout: "diff output" };
       if (cmd === "pbcopy") return { stdout: "" };
       return undefined;
@@ -595,11 +614,11 @@ describe("update_pr_description tool", () => {
     const tool = getTool();
     await tool.execute("id1", { new_content: "Done" }, undefined, undefined, {
       ui,
-    } as unknown);
+    });
     await expect(
       tool.execute("id2", { new_content: "ignored" }, undefined, undefined, {
         ui,
-      } as unknown),
+      }),
     ).rejects.toThrow(/no active/i);
   });
 
@@ -607,6 +626,7 @@ describe("update_pr_description tool", () => {
     await startSession();
     ui.nextCustomResult = true;
     deps.execResponders.push((cmd) => {
+      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
       if (cmd === "delta") return { stdout: "diff output" };
       if (cmd === "pbcopy") return { stdout: "" };
       return undefined;
@@ -617,7 +637,7 @@ describe("update_pr_description tool", () => {
       { new_content: "Accepted body" },
       undefined,
       undefined,
-      { ui } as unknown,
+      { ui },
     );
     // User clobbers clipboard somehow; pbcopy call count baseline:
     const pbcopyBefore = deps.execCalls.filter(
@@ -629,10 +649,186 @@ describe("update_pr_description tool", () => {
       ui,
       cwd: "/work",
       hasUI: true,
-    } as unknown);
+    });
 
     const pbcopyCalls = deps.execCalls.filter((c) => c.cmd === "pbcopy");
     expect(pbcopyCalls.length).toBe(pbcopyBefore + 1);
-    expect(pbcopyCalls[pbcopyCalls.length - 1]!.input).toBe("Accepted body");
+    expect(pbcopyCalls[pbcopyCalls.length - 1]!.input).toBe("Accepted body\n");
+  });
+});
+
+// ── Diff viewer overlay ─────────────────────────────────────────────
+
+const DOWN_ARROW = "\x1b[B";
+
+describe("diff viewer overlay", () => {
+  let pi: MockPi;
+  let deps: ReturnType<typeof makeMockDeps>;
+  let ui: ReturnType<typeof makeMockUi>;
+
+  beforeEach(() => {
+    pi = makeMockPi();
+    deps = makeMockDeps();
+    ui = makeMockUi();
+    createExtension(pi, deps);
+  });
+
+  async function startSession() {
+    deps.execResponders.push((cmd, args) => {
+      if (cmd === "gh" && args[1] === "view") {
+        return { stdout: "Original body" };
+      }
+      return undefined;
+    });
+    deps.editPromptTransform = (prefill) => prefill;
+    const cmd = pi.commands[0]!;
+    await cmd.config.handler("", {
+      ui,
+      cwd: "/work",
+      hasUI: true,
+    });
+  }
+
+  function getTool() {
+    return pi.tools.find((t) => t.name === "update_pr_description")!;
+  }
+
+  /** Execute the tool with a given diff output, triggering showDiffAndConfirm. */
+  async function executeDiffTool(diffOutput: string) {
+    await startSession();
+    ui.nextCustomResult = true;
+    deps.execResponders.push((cmd) => {
+      if (cmd === "diff") return { stdout: diffOutput, exitCode: 1 };
+      if (cmd === "delta") return { stdout: diffOutput };
+      if (cmd === "pbcopy") return { stdout: "" };
+      return undefined;
+    });
+    await getTool().execute("id1", { new_content: "x" }, undefined, undefined, {
+      ui,
+    });
+  }
+
+  /** Build the component from the captured factory for rendering tests. */
+  function buildComponent() {
+    const factory = ui.lastCustomFactory as (
+      tui: DiffViewerTui,
+      theme: DiffViewerTheme,
+      kb: unknown,
+      done: (v: boolean) => void,
+    ) => {
+      render: (w: number) => string[];
+      handleInput: (data: string) => void;
+    };
+    const mockTheme: DiffViewerTheme = {
+      bold: (s: string) => s,
+      fg: (_k: string, s: string) => s,
+    };
+    const mockTui: DiffViewerTui = { requestRender: () => {} };
+    return factory(mockTui, mockTheme, {}, () => {});
+  }
+
+  it("constrains rendered output to a maximum height", async () => {
+    const longDiff = Array.from({ length: 50 }, (_, i) => `line ${i}`).join(
+      "\n",
+    );
+    await executeDiffTool(longDiff);
+
+    const component = buildComponent();
+    const lines = component.render(80);
+    // The viewer should show a scrollable window, not dump all 50 lines
+    expect(
+      lines.length,
+      `Expected rendered height to be less than 50 (got ${lines.length}). ` +
+        `The diff viewer must constrain its output to DIFF_VIEW_MAX_LINES.`,
+    ).toBeLessThan(50);
+  });
+
+  it("shows the legend at the bottom so it is always visible", async () => {
+    await executeDiffTool("diff line 1\ndiff line 2");
+
+    const component = buildComponent();
+    const lines = component.render(80);
+    // Find the last non-empty line (padding lines may follow)
+    const lastContentLine = [...lines].reverse().find((l) => l.trim() !== "")!;
+    expect(lastContentLine).toContain("enter");
+    expect(lastContentLine).toContain("esc");
+  });
+
+  it("supports scrolling with up/down keys", async () => {
+    const longDiff = Array.from({ length: 50 }, (_, i) => `line ${i}`).join(
+      "\n",
+    );
+    await executeDiffTool(longDiff);
+
+    const component = buildComponent();
+    const contentLines = (lines: string[]) =>
+      lines.filter((l) => l.trim() !== "");
+    const linesBefore = contentLines(component.render(80));
+    const firstLineBefore = linesBefore[0];
+    // Simulate pressing down arrow
+    component.handleInput(DOWN_ARROW);
+    const linesAfter = contentLines(component.render(80));
+    const firstLineAfter = linesAfter[0];
+    // The first visible diff line should shift after scrolling down
+    expect(
+      firstLineAfter,
+      `Expected first visible line to change after scrolling down. ` +
+        `Before: "${firstLineBefore}", After: "${firstLineAfter}". ` +
+        `The handleInput for down-arrow must increment scrollOffset.`,
+    ).not.toBe(firstLineBefore);
+  });
+
+  it("supports g to jump to top and G to jump to bottom", async () => {
+    const longDiff = Array.from({ length: 50 }, (_, i) => `line ${i}`).join(
+      "\n",
+    );
+    await executeDiffTool(longDiff);
+
+    const component = buildComponent();
+    const contentLines = (lines: string[]) =>
+      lines.filter((l) => l.trim() !== "");
+
+    // G jumps to bottom (first visible line is diffLines.length - MAX_LINES = 20)
+    component.handleInput("G");
+    const atBottom = contentLines(component.render(80));
+    expect(
+      atBottom[0],
+      "G should jump to the bottom of the diff",
+    ).toContain("line 20");
+
+    // g jumps back to top
+    component.handleInput("g");
+    const atTop = contentLines(component.render(80));
+    expect(
+      atTop[0],
+      "g should jump to the top of the diff",
+    ).toContain("line 0");
+  });
+
+  it("supports d to page down and u to page up", async () => {
+    const longDiff = Array.from({ length: 90 }, (_, i) => `line ${i}`).join(
+      "\n",
+    );
+    await executeDiffTool(longDiff);
+
+    const component = buildComponent();
+    const contentLines = (lines: string[]) =>
+      lines.filter((l) => l.trim() !== "");
+
+    // d pages down one screenful (DIFF_VIEW_MAX_LINES = 30)
+    component.handleInput("d");
+    const afterPageDown = contentLines(component.render(80));
+    expect(
+      afterPageDown[0],
+      "d should page down by one screenful (30 lines)",
+    ).toContain("line 30");
+
+    // u pages back up
+    component.handleInput("u");
+    const afterPageUp = contentLines(component.render(80));
+    expect(
+      afterPageUp[0],
+      "u should page up by one screenful back to top",
+    ).toContain("line 0");
   });
 });

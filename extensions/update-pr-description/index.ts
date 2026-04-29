@@ -48,10 +48,28 @@ export interface UpdatePrDeps {
   ): Promise<string | undefined>;
 }
 
+export interface CustomOptions {
+  overlay?: boolean;
+  overlayOptions?: {
+    maxHeight?: string | number;
+    width?: string | number;
+    [key: string]: unknown;
+  };
+}
+
+export interface DiffViewerTheme {
+  bold: (s: string) => string;
+  fg: (k: string, s: string) => string;
+}
+
+export interface DiffViewerTui {
+  requestRender: () => void;
+}
+
 export interface MockUi {
   notify(msg: string, level: "info" | "warning" | "error"): void;
   confirm(title: string, body?: string): Promise<boolean>;
-  custom<T>(fn: unknown): Promise<T>;
+  custom<T>(fn: unknown, options?: CustomOptions): Promise<T>;
 }
 
 interface Session {
@@ -310,8 +328,8 @@ export function createExtension(
       const tmpDir = await deps.mkdtemp("pi-update-pr-");
       const originalPath = join(tmpDir, "original.md");
       const currentPath = join(tmpDir, "current.md");
-      await deps.writeFile(originalPath, originalBody);
-      await deps.writeFile(currentPath, originalBody);
+      await deps.writeFile(originalPath, normalizeForDiff(originalBody));
+      await deps.writeFile(currentPath, normalizeForDiff(originalBody));
 
       session = {
         tmpDir,
@@ -337,7 +355,7 @@ export function createExtension(
         return;
       }
 
-      pi.sendUserMessage(edited);
+      pi.sendUserMessage(edited, { streamingBehavior: "followUp" });
     },
   });
 
@@ -382,13 +400,20 @@ export function createExtension(
       const params = rawParams as { new_content: string };
       const ctx = rawCtx as { ui: MockUi };
 
-      await deps.writeFile(session.currentPath, params.new_content);
+      await deps.writeFile(
+        session.currentPath,
+        normalizeForDiff(params.new_content),
+      );
 
       // Produce diff via `delta` and show it.
-      const deltaResult = await deps.exec("delta", [
+      const diffResult = await deps.exec("diff", [
+        "-u",
         session.originalPath,
         session.currentPath,
       ]);
+      const deltaResult = await deps.exec("delta", ["--paging=never"], {
+        input: diffResult.stdout,
+      });
       const diffText =
         deltaResult.stdout ||
         deltaResult.stderr ||
@@ -397,7 +422,9 @@ export function createExtension(
       const accepted = await showDiffAndConfirm(ctx.ui, diffText);
 
       if (accepted) {
-        await deps.exec("pbcopy", [], { input: params.new_content });
+        await deps.exec("pbcopy", [], {
+          input: normalizeForDiff(params.new_content),
+        });
         const clearedSession = session;
         lastAcceptedPath = clearedSession.currentPath;
         session = null;
@@ -428,6 +455,15 @@ export function createExtension(
  * whether to accept it. Keeps the TUI integration out of the exported
  * factory so tests can substitute a mock `ui.custom`.
  */
+function normalizeForDiff(s: string): string {
+  return s.replace(/\r\n/g, "\n").trim() + "\n";
+}
+
+const DIFF_VIEW_MAX_LINES = 30;
+const DIFF_VIEW_PADDING = 2;
+const DOWN_ARROW = "\x1b[B";
+const UP_ARROW = "\x1b[A";
+
 async function showDiffAndConfirm(ui: MockUi, diff: string): Promise<boolean> {
   // Load pi-tui via dynamic import so the type-only top-level reference
   // never forces a runtime dependency on the peer package. Only the
@@ -446,26 +482,68 @@ async function showDiffAndConfirm(ui: MockUi, diff: string): Promise<boolean> {
     return ui.confirm("Accept updated PR description?");
   }
 
-  const { Text, matchesKey } = tui;
+  const { truncateToWidth, matchesKey } = tui;
   return ui.custom<boolean>(
     (
-      _tui: unknown,
+      tuiHandle: unknown,
       theme: unknown,
       _kb: unknown,
       done: (v: boolean) => void,
     ) => {
-      const t = theme as {
-        bold: (s: string) => string;
-        fg: (k: string, s: string) => string;
-      };
-      const header = t.bold(
-        t.fg("accent", "Updated PR description — enter:accept  esc:reject"),
-      );
-      const body = `${header}\n\n${diff}`;
-      const text = new Text(body, 0, 0);
+      const tui = tuiHandle as DiffViewerTui;
+      const t = theme as DiffViewerTheme;
+      const diffLines = diff.split("\n");
+      const maxScroll = Math.max(0, diffLines.length - DIFF_VIEW_MAX_LINES);
+      let scrollOffset = 0;
+
       return {
-        render: (w: number) => text.render(w),
-        invalidate: () => text.invalidate(),
+        render: (w: number) => {
+          if (scrollOffset > maxScroll) scrollOffset = maxScroll;
+
+          const pad = " ".repeat(DIFF_VIEW_PADDING);
+          const innerWidth = w - DIFF_VIEW_PADDING * 2;
+          const visibleLines = diffLines.slice(
+            scrollOffset,
+            scrollOffset + DIFF_VIEW_MAX_LINES,
+          );
+          const output: string[] = [];
+
+          for (let i = 0; i < DIFF_VIEW_PADDING; i++) output.push("");
+
+          for (const line of visibleLines) {
+            output.push(pad + truncateToWidth(line, innerWidth));
+          }
+
+          if (diffLines.length > DIFF_VIEW_MAX_LINES) {
+            const pos =
+              maxScroll > 0 ? Math.round((scrollOffset / maxScroll) * 100) : 0;
+            output.push(
+              pad +
+                truncateToWidth(
+                  t.fg("muted", `── ${pos}% ── ↑/↓ scroll ──`),
+                  innerWidth,
+                ),
+            );
+          }
+
+          output.push(
+            pad +
+              truncateToWidth(
+                t.bold(
+                  t.fg(
+                    "accent",
+                    "enter:accept  esc:reject  ↑/↓:scroll  d/u:page  g/G:top/bottom",
+                  ),
+                ),
+                innerWidth,
+              ),
+          );
+
+          for (let i = 0; i < DIFF_VIEW_PADDING; i++) output.push("");
+
+          return output;
+        },
+        invalidate: () => {},
         handleInput: (data: string) => {
           if (matchesKey(data, "escape")) {
             done(false);
@@ -475,8 +553,49 @@ async function showDiffAndConfirm(ui: MockUi, diff: string): Promise<boolean> {
             done(true);
             return;
           }
+          if (data === DOWN_ARROW || matchesKey(data, "j")) {
+            if (scrollOffset < maxScroll) {
+              scrollOffset++;
+              tui.requestRender();
+            }
+            return;
+          }
+          if (data === UP_ARROW || matchesKey(data, "k")) {
+            if (scrollOffset > 0) {
+              scrollOffset--;
+              tui.requestRender();
+            }
+            return;
+          }
+          if (matchesKey(data, "g")) {
+            scrollOffset = 0;
+            tui.requestRender();
+            return;
+          }
+          if (matchesKey(data, "shift+g")) {
+            scrollOffset = maxScroll;
+            tui.requestRender();
+            return;
+          }
+          if (matchesKey(data, "d")) {
+            scrollOffset = Math.min(
+              maxScroll,
+              scrollOffset + DIFF_VIEW_MAX_LINES,
+            );
+            tui.requestRender();
+            return;
+          }
+          if (matchesKey(data, "u")) {
+            scrollOffset = Math.max(0, scrollOffset - DIFF_VIEW_MAX_LINES);
+            tui.requestRender();
+            return;
+          }
         },
       };
+    },
+    {
+      overlay: true,
+      overlayOptions: { width: "90%", maxHeight: "90%" },
     },
   );
 }
