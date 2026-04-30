@@ -96,7 +96,7 @@ signals — all unprivileged.
 General VS Code tips.
 
 - Close unused windows. Each one runs a language server (when a language is detected) and its renderer process uses 230–370 MB.
-- Disable GitHub Co-Pilot. This baloons the size of each language server process.
+- Disable GitHub Co-Pilot. This balloons the size of each language server process.
 - Disable GitLens (if you have it) or tame its use of `git for-each-ref` with these settings:
 
   ```
