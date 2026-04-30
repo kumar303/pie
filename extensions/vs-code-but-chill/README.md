@@ -18,10 +18,6 @@ open or edit a file in that workspace, so you'll never notice
 except for the memory it frees up. Active workspaces are left
 alone.
 
-If you're still having trouble, use
-[kumar303/debug-memory-leak](https://github.com/kumar303/debug-memory-leak)
-to identify what else is leaking.
-
 ## How it works
 
 - A background server (spawned via pi's bundled `jiti`) polls every
@@ -94,6 +90,25 @@ Logs and other ephemeral files are written to `~/.cache/vs-code-but-chill_pi/`.
 
 macOS only. Relies on `/usr/bin/pgrep`, `/usr/sbin/lsof`, and POSIX
 signals — all unprivileged.
+
+## Troubleshooting
+
+General VS Code tips.
+
+- Close unused windows. Each one runs a language server (when a language is detected) and its renderer process uses 230–370 MB.
+- Disable GitHub Co-Pilot. This baloons the size of each language server process.
+- Disable GitLens (if you have it) or tame its use of `git for-each-ref` with these settings:
+
+  ```
+  "gitlens.advanced.repositorySearchDepth": 1,
+  "git.branchSortOrder": "alphabetically",
+  ```
+
+  This might only be a problem for large monorepos.
+
+If you're still having trouble, use
+[kumar303/debug-memory-leak](https://github.com/kumar303/debug-memory-leak)
+to identify what else is leaking.
 
 ## Alternatives
 
