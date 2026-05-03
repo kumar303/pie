@@ -95,7 +95,7 @@ signals — all unprivileged.
 
 General VS Code tips.
 
-- Limit the memory used by TS Server to something like 1G `"js/ts.tsserver.maxMemory": 1024`
+- Limit the memory used by TS Server to something like 3G (`"js/ts.tsserver.maxMemory": 3072`) or whatever fits your largest project in memory. If it's too small, VS Code will enter a crash loop.
 - Close unused windows. Each one runs a language server (when a language is detected) and its renderer process uses 230–370 MB.
 - Disable GitHub Co-Pilot. This balloons the size of each language server process.
 - Disable GitLens (if you have it) or tame its use of `git for-each-ref` with these settings:
