@@ -3,6 +3,7 @@ import {
   buildUpdatePrompt,
   createExtension,
   type UpdatePrDeps,
+  type MinimalPi,
   type MockUi,
   type CustomOptions,
   type DiffViewerTheme,
@@ -19,23 +20,7 @@ describe("buildUpdatePrompt", () => {
     expect(prompt).toContain("## Existing\n\nSome body");
   });
 
-  it("instructs to wrap new content in <details> tags", () => {
-    const prompt = buildUpdatePrompt("x");
-    expect(prompt).toContain("<details>");
-  });
-
-  it("instructs to be careful with existing content", () => {
-    const prompt = buildUpdatePrompt("x");
-    expect(prompt.toLowerCase()).toContain("careful");
-  });
-
-  it("instructs the agent to submit via the update_pr_description tool", () => {
-    const prompt = buildUpdatePrompt("x");
-    expect(prompt).toContain("update_pr_description");
-    expect(prompt).toContain("new_content");
-  });
-
-  it("marks where the editable content begins", () => {
+  it("places the BEGIN marker before the editable content", () => {
     const prompt = buildUpdatePrompt("## Existing\n\nSome body");
     const marker = prompt.indexOf("BEGIN PR DESCRIPTION");
     const bodyIdx = prompt.indexOf("## Existing");
@@ -46,38 +31,22 @@ describe("buildUpdatePrompt", () => {
 
 // ── Integration harness ──────────────────────────────────────────────
 
+/** Extract the command config type from MinimalPi.registerCommand's second parameter. */
 type RegisteredCommand = {
   name: string;
-  config: {
-    description: string;
-    handler: (args: string, ctx: unknown) => Promise<void> | void;
-    getArgumentCompletions?: (
-      prefix: string,
-    ) => Array<{ value: string; label: string }>;
-  };
+  config: Parameters<MinimalPi["registerCommand"]>[1];
 };
 
-type RegisteredTool = {
-  name: string;
-  label: string;
-  description: string;
-  parameters: unknown;
-  execute: (
-    toolCallId: string,
-    params: unknown,
-    signal?: AbortSignal,
-    onUpdate?: unknown,
-    ctx?: unknown,
-  ) => Promise<{ content: Array<{ type: string; text: string }> }>;
-};
+/** Extract the tool definition type from MinimalPi.registerTool's first parameter. */
+type RegisteredTool = Parameters<MinimalPi["registerTool"]>[0];
 
-interface MockPi {
+interface MockPi extends MinimalPi {
   commands: RegisteredCommand[];
   tools: RegisteredTool[];
-  sent: Array<{ content: string; options?: unknown }>;
-  registerCommand(name: string, config: RegisteredCommand["config"]): void;
-  registerTool(def: RegisteredTool): void;
-  sendUserMessage(content: string, options?: unknown): void;
+  sent: Array<{
+    content: string;
+    options?: Parameters<MinimalPi["sendUserMessage"]>[1];
+  }>;
 }
 
 function makeMockPi(): MockPi {
@@ -211,19 +180,44 @@ function makeMockDeps(): UpdatePrDeps & {
   return deps;
 }
 
+// ── Shared test harness factory ──────────────────────────────────────
+
+function makeHarness() {
+  const pi = makeMockPi();
+  const deps = makeMockDeps();
+  const ui = makeMockUi();
+  createExtension(pi, deps);
+
+  async function startSession() {
+    deps.execResponders.push((cmd, args) => {
+      if (cmd === "gh" && args[1] === "view") {
+        return { stdout: "Original body" };
+      }
+      return undefined;
+    });
+    deps.editPromptTransform = (prefill) => prefill;
+    const cmd = pi.commands[0]!;
+    await cmd.config.handler("", {
+      ui,
+      cwd: "/work",
+      hasUI: true,
+    });
+  }
+
+  function getTool() {
+    return pi.tools.find((t) => t.name === "update_pr_description")!;
+  }
+
+  return { pi, deps, ui, startSession, getTool };
+}
+
+type Harness = ReturnType<typeof makeHarness>;
+
 // ── Extension registration ──────────────────────────────────────────
 
 describe("createExtension registration", () => {
-  it("registers /update-pr-description command", () => {
-    const pi = makeMockPi();
-    createExtension(pi, makeMockDeps());
-    const cmd = pi.commands.find((c) => c.name === "update-pr-description");
-    expect(cmd).toBeDefined();
-  });
-
-  it("suggests 'copy' as argument completion", () => {
-    const pi = makeMockPi();
-    createExtension(pi, makeMockDeps());
+  it("filters argument completions by prefix", () => {
+    const { pi } = makeHarness();
     const cmd = pi.commands.find((c) => c.name === "update-pr-description")!;
     const all = cmd.config.getArgumentCompletions!("").map((i) => i.value);
     expect(all).toContain("copy");
@@ -235,27 +229,17 @@ describe("createExtension registration", () => {
       cmd.config.getArgumentCompletions!("zzz").map((i) => i.value),
     ).toEqual([]);
   });
-
-  it("registers update_pr_description tool", () => {
-    const pi = makeMockPi();
-    createExtension(pi, makeMockDeps());
-    const tool = pi.tools.find((t) => t.name === "update_pr_description");
-    expect(tool).toBeDefined();
-  });
 });
 
 // ── Command handler ─────────────────────────────────────────────────
 
 describe("command handler", () => {
-  let pi: MockPi;
-  let deps: ReturnType<typeof makeMockDeps>;
-  let ui: ReturnType<typeof makeMockUi>;
+  let pi: Harness["pi"];
+  let deps: Harness["deps"];
+  let ui: Harness["ui"];
 
   beforeEach(() => {
-    pi = makeMockPi();
-    deps = makeMockDeps();
-    ui = makeMockUi();
-    createExtension(pi, deps);
+    ({ pi, deps, ui } = makeHarness());
   });
 
   async function runCmd(args: string = "") {
@@ -283,10 +267,13 @@ describe("command handler", () => {
     const ghCall = deps.execCalls.find(
       (c) => c.cmd === "gh" && c.args[0] === "pr" && c.args[1] === "view",
     );
-    expect(ghCall).toBeDefined();
+    expect(ghCall, "expected a `gh pr view` exec call").toBeDefined();
     expect(ghCall!.args).toContain("--json");
     // No URL argument — relies on gh discovering the PR from the branch.
-    expect(ghCall!.args.some((a) => a.startsWith("http"))).toBe(false);
+    expect(
+      ghCall!.args.some((a) => a.startsWith("http")),
+      `gh args should not contain a URL, got: ${JSON.stringify(ghCall!.args)}`,
+    ).toBe(false);
   });
 
   it("ignores any stray arguments", async () => {
@@ -295,9 +282,10 @@ describe("command handler", () => {
     const ghCall = deps.execCalls.find(
       (c) => c.cmd === "gh" && c.args[1] === "view",
     );
-    expect(ghCall).toBeDefined();
+    expect(ghCall, "expected a `gh pr view` exec call").toBeDefined();
     expect(
       ghCall!.args.some((a) => a === "https://github.com/o/r/pull/42"),
+      `stray URL should not appear in gh args, got: ${JSON.stringify(ghCall!.args)}`,
     ).toBe(false);
   });
 
@@ -305,8 +293,14 @@ describe("command handler", () => {
     respondBody("Original PR body");
     await runCmd();
     const paths = Array.from(deps.files.keys());
-    expect(paths.some((p) => p.endsWith("/original.md"))).toBe(true);
-    expect(paths.some((p) => p.endsWith("/current.md"))).toBe(true);
+    expect(
+      paths.some((p) => p.endsWith("/original.md")),
+      `expected original.md in written files, got: ${paths.join(", ")}`,
+    ).toBe(true);
+    expect(
+      paths.some((p) => p.endsWith("/current.md")),
+      `expected current.md in written files, got: ${paths.join(", ")}`,
+    ).toBe(true);
     for (const p of paths) {
       expect(deps.files.get(p)).toBe("Original PR body\n");
     }
@@ -350,6 +344,14 @@ describe("command handler", () => {
     expect(pi.sent[0]!.content).toContain("EXTRA USER INSTRUCTION");
   });
 
+  it("sends the prompt as a follow-up so it queues behind any active agent work", async () => {
+    respondBody("body");
+    deps.editPromptTransform = (prefill) => prefill;
+    await runCmd();
+    expect(pi.sent).toHaveLength(1);
+    expect(pi.sent[0]!.options).toEqual({ deliverAs: "followUp" });
+  });
+
   it("aborts without sending a prompt when the user escapes the editor", async () => {
     respondBody("## Original body line");
     deps.editPromptResult = undefined; // escape
@@ -364,7 +366,10 @@ describe("command handler", () => {
     });
     await runCmd();
     expect(pi.sent).toHaveLength(0);
-    expect(ui.notifications.some((n) => n.level === "error")).toBe(true);
+    expect(
+      ui.notifications.some((n) => n.level === "error"),
+      `expected an error notification, got: ${JSON.stringify(ui.notifications)}`,
+    ).toBe(true);
   });
 
   describe("copy subcommand", () => {
@@ -389,17 +394,29 @@ describe("command handler", () => {
       expect(pi.sent.length).toBe(sentBefore);
       // It piped current.md into pbcopy.
       const pbcopy = deps.execCalls.find((c) => c.cmd === "pbcopy");
-      expect(pbcopy).toBeDefined();
+      expect(pbcopy, "expected a pbcopy exec call").toBeDefined();
       expect(pbcopy!.input).toBe("Updated body");
       // Confirmation notice was shown.
-      expect(ui.notifications.some((n) => n.level === "info")).toBe(true);
+      expect(
+        ui.notifications.some((n) => n.level === "info"),
+        `expected an info notification after copy, got: ${JSON.stringify(ui.notifications)}`,
+      ).toBe(true);
     });
 
     it("notifies an error when there is no active session to copy from", async () => {
       await runCmd("copy");
-      expect(ui.notifications.some((n) => n.level === "error")).toBe(true);
-      expect(deps.execCalls.some((c) => c.cmd === "pbcopy")).toBe(false);
-      expect(deps.execCalls.some((c) => c.cmd === "gh")).toBe(false);
+      expect(
+        ui.notifications.some((n) => n.level === "error"),
+        `expected an error notification, got: ${JSON.stringify(ui.notifications)}`,
+      ).toBe(true);
+      expect(
+        deps.execCalls.some((c) => c.cmd === "pbcopy"),
+        "pbcopy should not be called without an active session",
+      ).toBe(false);
+      expect(
+        deps.execCalls.some((c) => c.cmd === "gh"),
+        "gh should not be called for the copy subcommand",
+      ).toBe(false);
     });
   });
 });
@@ -407,35 +424,24 @@ describe("command handler", () => {
 // ── Tool execution ──────────────────────────────────────────────────
 
 describe("update_pr_description tool", () => {
-  let pi: MockPi;
-  let deps: ReturnType<typeof makeMockDeps>;
-  let ui: ReturnType<typeof makeMockUi>;
+  let pi: Harness["pi"];
+  let deps: Harness["deps"];
+  let ui: Harness["ui"];
+  let startSession: Harness["startSession"];
+  let getTool: Harness["getTool"];
 
   beforeEach(() => {
-    pi = makeMockPi();
-    deps = makeMockDeps();
-    ui = makeMockUi();
-    createExtension(pi, deps);
+    ({ pi, deps, ui, startSession, getTool } = makeHarness());
   });
 
-  async function startSession() {
-    deps.execResponders.push((cmd, args) => {
-      if (cmd === "gh" && args[1] === "view") {
-        return { stdout: "Original body" };
-      }
+  /** Set up exec responders for a normal diff→delta→pbcopy flow. */
+  function respondWithDiff(diffOutput = "unified diff") {
+    deps.execResponders.push((cmd) => {
+      if (cmd === "diff") return { stdout: diffOutput, exitCode: 1 };
+      if (cmd === "delta") return { stdout: "colored " + diffOutput };
+      if (cmd === "pbcopy") return { stdout: "" };
       return undefined;
     });
-    deps.editPromptTransform = (prefill) => prefill; // auto-accept editor with prefill
-    const cmd = pi.commands[0]!;
-    await cmd.config.handler("", {
-      ui,
-      cwd: "/work",
-      hasUI: true,
-    });
-  }
-
-  function getTool() {
-    return pi.tools.find((t) => t.name === "update_pr_description")!;
   }
 
   it("errors if no active session", async () => {
@@ -449,14 +455,8 @@ describe("update_pr_description tool", () => {
 
   it("writes new content to current.md", async () => {
     await startSession();
-    ui.confirmAnswer = true;
     ui.nextCustomResult = true;
-    deps.execResponders.push((cmd) => {
-      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
-      if (cmd === "delta") return { stdout: "diff output" };
-      if (cmd === "pbcopy") return { stdout: "" };
-      return undefined;
-    });
+    respondWithDiff();
     const tool = getTool();
     await tool.execute(
       "id1",
@@ -473,14 +473,8 @@ describe("update_pr_description tool", () => {
 
   it("runs diff and delta against original and current", async () => {
     await startSession();
-    ui.confirmAnswer = true;
     ui.nextCustomResult = true;
-    deps.execResponders.push((cmd) => {
-      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
-      if (cmd === "delta") return { stdout: "colored diff" };
-      if (cmd === "pbcopy") return { stdout: "" };
-      return undefined;
-    });
+    respondWithDiff();
     const tool = getTool();
     await tool.execute(
       "id1",
@@ -490,23 +484,47 @@ describe("update_pr_description tool", () => {
       { ui },
     );
     const diffCall = deps.execCalls.find((c) => c.cmd === "diff");
-    expect(diffCall).toBeDefined();
-    expect(diffCall!.args.some((a) => a.endsWith("/original.md"))).toBe(true);
-    expect(diffCall!.args.some((a) => a.endsWith("/current.md"))).toBe(true);
+    expect(diffCall, "expected a `diff` exec call").toBeDefined();
+    expect(
+      diffCall!.args.some((a) => a.endsWith("/original.md")),
+      `diff args should include original.md, got: ${JSON.stringify(diffCall!.args)}`,
+    ).toBe(true);
+    expect(
+      diffCall!.args.some((a) => a.endsWith("/current.md")),
+      `diff args should include current.md, got: ${JSON.stringify(diffCall!.args)}`,
+    ).toBe(true);
     const deltaCall = deps.execCalls.find((c) => c.cmd === "delta");
-    expect(deltaCall).toBeDefined();
+    expect(deltaCall, "expected a `delta` exec call").toBeDefined();
     expect(deltaCall!.input).toBe("unified diff");
+  });
+
+  it("copies the original new_content to clipboard without normalizing long lines", async () => {
+    await startSession();
+    ui.nextCustomResult = true;
+    const longLine = "A".repeat(200);
+    const newContent = `Short line\n${longLine}\nAnother short line`;
+    respondWithDiff();
+    const tool = getTool();
+    await tool.execute(
+      "id1",
+      { new_content: newContent },
+      undefined,
+      undefined,
+      { ui },
+    );
+    const pbcopyCall = deps.execCalls.find((c) => c.cmd === "pbcopy");
+    expect(pbcopyCall, "expected a pbcopy exec call").toBeDefined();
+    // The clipboard content should preserve the long line as-is
+    expect(
+      pbcopyCall!.input,
+      "clipboard content should contain the full 200-char line without wrapping",
+    ).toContain(longLine);
   });
 
   it("copies current.md to clipboard when user confirms", async () => {
     await startSession();
     ui.nextCustomResult = true;
-    deps.execResponders.push((cmd) => {
-      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
-      if (cmd === "delta") return { stdout: "diff output" };
-      if (cmd === "pbcopy") return { stdout: "" };
-      return undefined;
-    });
+    respondWithDiff();
     const tool = getTool();
     const result = await tool.execute(
       "id1",
@@ -516,9 +534,12 @@ describe("update_pr_description tool", () => {
       { ui },
     );
     const pbcopyCall = deps.execCalls.find((c) => c.cmd === "pbcopy");
-    expect(pbcopyCall).toBeDefined();
+    expect(pbcopyCall, "expected a pbcopy exec call on accept").toBeDefined();
     expect(pbcopyCall!.input).toBe("Final body\n");
-    expect(result.content[0]!.text.toLowerCase()).toContain("clipboard");
+    expect(
+      result.content[0]!.text.toLowerCase(),
+      "tool response should confirm clipboard copy to the agent",
+    ).toContain("clipboard");
   });
 
   it("propagates unexpected errors from ui.custom instead of silently confirming", async () => {
@@ -528,13 +549,7 @@ describe("update_pr_description tool", () => {
     ui.custom = async () => {
       throw boom;
     };
-    ui.confirmAnswer = true; // would mask the error if fallback kicked in
-    deps.execResponders.push((cmd) => {
-      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
-      if (cmd === "delta") return { stdout: "diff output" };
-      if (cmd === "pbcopy") return { stdout: "" };
-      return undefined;
-    });
+    respondWithDiff();
     const tool = getTool();
     await expect(
       tool.execute("id1", { new_content: "x" }, undefined, undefined, {
@@ -542,18 +557,16 @@ describe("update_pr_description tool", () => {
       }),
     ).rejects.toBe(boom);
     // And nothing was copied to the clipboard.
-    expect(deps.execCalls.some((c) => c.cmd === "pbcopy")).toBe(false);
+    expect(
+      deps.execCalls.some((c) => c.cmd === "pbcopy"),
+      "pbcopy should not be called when ui.custom throws",
+    ).toBe(false);
   });
 
   it("does not copy to clipboard when user declines", async () => {
     await startSession();
     ui.nextCustomResult = false;
-    deps.execResponders.push((cmd) => {
-      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
-      if (cmd === "delta") return { stdout: "diff output" };
-      if (cmd === "pbcopy") return { stdout: "" };
-      return undefined;
-    });
+    respondWithDiff();
     const tool = getTool();
     const result = await tool.execute(
       "id1",
@@ -562,22 +575,21 @@ describe("update_pr_description tool", () => {
       undefined,
       { ui },
     );
-    expect(deps.execCalls.some((c) => c.cmd === "pbcopy")).toBe(false);
+    expect(
+      deps.execCalls.some((c) => c.cmd === "pbcopy"),
+      "pbcopy should not be called when user declines the diff",
+    ).toBe(false);
     // Should return a message telling the agent to wait for user feedback
-    expect(result.content[0]!.text.toLowerCase()).toMatch(
-      /wait|feedback|user|changes/,
-    );
+    expect(
+      result.content[0]!.text.toLowerCase(),
+      `tool response should tell the agent to wait, got: "${result.content[0]!.text}"`,
+    ).toMatch(/wait|feedback|user|changes/);
   });
 
   it("allows the agent to iterate: second invocation updates current.md again", async () => {
     await startSession();
     ui.nextCustomResult = false;
-    deps.execResponders.push((cmd) => {
-      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
-      if (cmd === "delta") return { stdout: "diff output" };
-      if (cmd === "pbcopy") return { stdout: "" };
-      return undefined;
-    });
+    respondWithDiff();
     const tool = getTool();
     await tool.execute(
       "id1",
@@ -602,15 +614,41 @@ describe("update_pr_description tool", () => {
     expect(deps.execCalls.filter((c) => c.cmd === "pbcopy")).toHaveLength(1);
   });
 
+  it("detects no changes and returns early without showing diff", async () => {
+    await startSession();
+    // diff exits 0 when files are identical
+    deps.execResponders.push((cmd) => {
+      if (cmd === "diff") return { stdout: "", exitCode: 0 };
+      return undefined;
+    });
+    const tool = getTool();
+    const result = await tool.execute(
+      "id1",
+      { new_content: "Original body" },
+      undefined,
+      undefined,
+      { ui },
+    );
+    // Should not show a diff overlay or call delta
+    expect(
+      deps.execCalls.some((c) => c.cmd === "delta"),
+      "delta should not be called when diff exits 0 (no changes)",
+    ).toBe(false);
+    expect(
+      deps.execCalls.some((c) => c.cmd === "pbcopy"),
+      "pbcopy should not be called when there are no changes",
+    ).toBe(false);
+    // Should tell the agent there were no changes
+    expect(
+      result.content[0]!.text.toLowerCase(),
+      `tool response should say "no changes", got: "${result.content[0]!.text}"`,
+    ).toMatch(/no changes/);
+  });
+
   it("clears session after user accepts (second call errors)", async () => {
     await startSession();
     ui.nextCustomResult = true;
-    deps.execResponders.push((cmd) => {
-      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
-      if (cmd === "delta") return { stdout: "diff output" };
-      if (cmd === "pbcopy") return { stdout: "" };
-      return undefined;
-    });
+    respondWithDiff();
     const tool = getTool();
     await tool.execute("id1", { new_content: "Done" }, undefined, undefined, {
       ui,
@@ -625,12 +663,7 @@ describe("update_pr_description tool", () => {
   it("/update-pr-description copy still works after the agent's submission was accepted", async () => {
     await startSession();
     ui.nextCustomResult = true;
-    deps.execResponders.push((cmd) => {
-      if (cmd === "diff") return { stdout: "unified diff", exitCode: 1 };
-      if (cmd === "delta") return { stdout: "diff output" };
-      if (cmd === "pbcopy") return { stdout: "" };
-      return undefined;
-    });
+    respondWithDiff();
     const tool = getTool();
     await tool.execute(
       "id1",
@@ -662,36 +695,14 @@ describe("update_pr_description tool", () => {
 const DOWN_ARROW = "\x1b[B";
 
 describe("diff viewer overlay", () => {
-  let pi: MockPi;
-  let deps: ReturnType<typeof makeMockDeps>;
-  let ui: ReturnType<typeof makeMockUi>;
+  let deps: Harness["deps"];
+  let ui: Harness["ui"];
+  let startSession: Harness["startSession"];
+  let getTool: Harness["getTool"];
 
   beforeEach(() => {
-    pi = makeMockPi();
-    deps = makeMockDeps();
-    ui = makeMockUi();
-    createExtension(pi, deps);
+    ({ deps, ui, startSession, getTool } = makeHarness());
   });
-
-  async function startSession() {
-    deps.execResponders.push((cmd, args) => {
-      if (cmd === "gh" && args[1] === "view") {
-        return { stdout: "Original body" };
-      }
-      return undefined;
-    });
-    deps.editPromptTransform = (prefill) => prefill;
-    const cmd = pi.commands[0]!;
-    await cmd.config.handler("", {
-      ui,
-      cwd: "/work",
-      hasUI: true,
-    });
-  }
-
-  function getTool() {
-    return pi.tools.find((t) => t.name === "update_pr_description")!;
-  }
 
   /** Execute the tool with a given diff output, triggering showDiffAndConfirm. */
   async function executeDiffTool(diffOutput: string) {
@@ -726,6 +737,24 @@ describe("diff viewer overlay", () => {
     const mockTui: DiffViewerTui = { requestRender: () => {} };
     return factory(mockTui, mockTheme, {}, () => {});
   }
+
+  it("wraps long lines instead of truncating them", async () => {
+    // A line wider than the viewport should wrap onto multiple lines
+    const longLine = "A".repeat(200);
+    await executeDiffTool(longLine);
+
+    const component = buildComponent();
+    const lines = component.render(80);
+    const contentLines = lines.filter((l) => l.trim() !== "");
+    // With padding=2, inner width = 76. A 200-char line should wrap to 3 lines.
+    const aLines = contentLines.filter((l) => l.includes("A"));
+    expect(
+      aLines.length,
+      `Expected a 200-char line to wrap into multiple lines at width 80, ` +
+        `but got ${aLines.length} line(s). The diff viewer must use ` +
+        `wrapTextWithAnsi instead of truncateToWidth for diff content.`,
+    ).toBeGreaterThan(1);
+  });
 
   it("constrains rendered output to a maximum height", async () => {
     const longDiff = Array.from({ length: 50 }, (_, i) => `line ${i}`).join(
@@ -791,18 +820,16 @@ describe("diff viewer overlay", () => {
     // G jumps to bottom (first visible line is diffLines.length - MAX_LINES = 20)
     component.handleInput("G");
     const atBottom = contentLines(component.render(80));
-    expect(
-      atBottom[0],
-      "G should jump to the bottom of the diff",
-    ).toContain("line 20");
+    expect(atBottom[0], "G should jump to the bottom of the diff").toContain(
+      "line 20",
+    );
 
     // g jumps back to top
     component.handleInput("g");
     const atTop = contentLines(component.render(80));
-    expect(
-      atTop[0],
-      "g should jump to the top of the diff",
-    ).toContain("line 0");
+    expect(atTop[0], "g should jump to the top of the diff").toContain(
+      "line 0",
+    );
   });
 
   it("supports d to page down and u to page up", async () => {

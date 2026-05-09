@@ -78,7 +78,7 @@ interface Session {
   currentPath: string;
 }
 
-interface MinimalPi {
+export interface MinimalPi {
   registerCommand(
     name: string,
     config: {
@@ -108,7 +108,7 @@ interface MinimalPi {
 // ── Prompt ───────────────────────────────────────────────────────────
 
 export function buildUpdatePrompt(oldContent: string): string {
-  return `Update the GitHub PR description below to reflect the latest changes on this branch. Be careful with your edit. Only change existing content if it's inaccurate or out of date. Wrap any newly added content in <details> tags.
+  return `Update the GitHub PR description below to reflect the latest changes on this branch. Be careful with your edit. Only change existing content if it's inaccurate or out of date. Wrap any newly added content in <details> tags. Do not list tests or files changed.
 
 When your rewrite is ready, submit it by calling the \`update_pr_description\` tool with the complete new markdown in the \`new_content\` argument. Do not print the markdown in chat, do not write it to any other file, and do not use a different tool to update the PR.
 
@@ -252,6 +252,7 @@ async function defaultEditPrompt(
 export function parseGhPrView(stdout: string): {
   body: string;
   url: string | undefined;
+  parseWarning: string | undefined;
 } {
   const trimmed = stdout.trimStart();
   if (trimmed.startsWith("{")) {
@@ -263,12 +264,17 @@ export function parseGhPrView(stdout: string): {
       return {
         body: typeof parsed.body === "string" ? parsed.body : "",
         url: typeof parsed.url === "string" ? parsed.url : undefined,
+        parseWarning: undefined,
       };
-    } catch {
-      // Fall through to treat as raw body.
+    } catch (err) {
+      return {
+        body: stdout,
+        url: undefined,
+        parseWarning: `gh output looks like JSON but failed to parse: ${err instanceof Error ? err.message : err}`,
+      };
     }
   }
-  return { body: stdout, url: undefined };
+  return { body: stdout, url: undefined, parseWarning: undefined };
 }
 
 function shellEscape(s: string): string {
@@ -322,7 +328,12 @@ export function createExtension(
         ctx.ui.notify(`Failed to fetch PR: ${msg}`, "error");
         return;
       }
-      const { body: originalBody, url: prUrl } = parseGhPrView(ghResult.stdout);
+      const {
+        body: originalBody,
+        url: prUrl,
+        parseWarning,
+      } = parseGhPrView(ghResult.stdout);
+      if (parseWarning) ctx.ui.notify(parseWarning, "warning");
 
       // Create temp workdir and stash files.
       const tmpDir = await deps.mkdtemp("pi-update-pr-");
@@ -355,7 +366,7 @@ export function createExtension(
         return;
       }
 
-      pi.sendUserMessage(edited, { streamingBehavior: "followUp" });
+      pi.sendUserMessage(edited, { deliverAs: "followUp" });
     },
   });
 
@@ -405,12 +416,23 @@ export function createExtension(
         normalizeForDiff(params.new_content),
       );
 
-      // Produce diff via `delta` and show it.
       const diffResult = await deps.exec("diff", [
         "-u",
         session.originalPath,
         session.currentPath,
       ]);
+
+      if (diffResult.exitCode === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No changes detected — the PR description is already up to date.",
+            },
+          ],
+        };
+      }
+
       const deltaResult = await deps.exec("delta", ["--paging=never"], {
         input: diffResult.stdout,
       });
@@ -482,7 +504,7 @@ async function showDiffAndConfirm(ui: MockUi, diff: string): Promise<boolean> {
     return ui.confirm("Accept updated PR description?");
   }
 
-  const { truncateToWidth, matchesKey } = tui;
+  const { truncateToWidth, wrapTextWithAnsi, matchesKey } = tui;
   return ui.custom<boolean>(
     (
       tuiHandle: unknown,
@@ -492,16 +514,24 @@ async function showDiffAndConfirm(ui: MockUi, diff: string): Promise<boolean> {
     ) => {
       const tui = tuiHandle as DiffViewerTui;
       const t = theme as DiffViewerTheme;
-      const diffLines = diff.split("\n");
-      const maxScroll = Math.max(0, diffLines.length - DIFF_VIEW_MAX_LINES);
+      const rawDiffLines = diff.split("\n");
       let scrollOffset = 0;
+      // Initialize from rawDiffLines so scroll keys work before the first render.
+      let maxScroll = Math.max(0, rawDiffLines.length - DIFF_VIEW_MAX_LINES);
 
       return {
         render: (w: number) => {
-          if (scrollOffset > maxScroll) scrollOffset = maxScroll;
-
           const pad = " ".repeat(DIFF_VIEW_PADDING);
           const innerWidth = w - DIFF_VIEW_PADDING * 2;
+
+          // wrapTextWithAnsi preserves ANSI escape codes from delta's colored output.
+          const diffLines = rawDiffLines.flatMap((line) => {
+            const wrapped = wrapTextWithAnsi(line, innerWidth);
+            return wrapped.length > 0 ? wrapped : [""];
+          });
+          maxScroll = Math.max(0, diffLines.length - DIFF_VIEW_MAX_LINES);
+          if (scrollOffset > maxScroll) scrollOffset = maxScroll;
+
           const visibleLines = diffLines.slice(
             scrollOffset,
             scrollOffset + DIFF_VIEW_MAX_LINES,
