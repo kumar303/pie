@@ -35,8 +35,8 @@ import { tmpdir } from "node:os";
 import type {
   ExtensionContext,
   ExtensionUIContext,
-} from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { createExtension, type BrainPi } from "./index.js";
 import type {
   Client as RealClient,

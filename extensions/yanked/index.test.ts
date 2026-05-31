@@ -6,8 +6,8 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
-import { Key } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { Key } from "@earendil-works/pi-tui";
 import yankedExtension, { createYankedListView } from "./index.ts";
 import type { YankedDeps } from "./index.ts";
 import { createFileStore } from "./store.ts";

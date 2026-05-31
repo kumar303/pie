@@ -10,8 +10,8 @@ import { dirname, join } from "node:path";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
-} from "@mariozechner/pi-coding-agent";
-import { Text, matchesKey, Key, truncateToWidth } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { Text, matchesKey, Key, truncateToWidth } from "@earendil-works/pi-tui";
 import { watch, type FSWatcher } from "node:fs";
 import { IpcClient } from "./server/ipc-client.ts";
 import { defaultDataDir, ensureServer, onTypedMessage } from "./client.ts";

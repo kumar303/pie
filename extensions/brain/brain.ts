@@ -13,7 +13,7 @@ import {
   truncateToWidth,
   visibleWidth,
   type Component,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import { filterDirs, type BrainData, type DirEntry } from "./store.js";
 import type { StatusMessage, ErrorMessage } from "./service.js";
 import { basename } from "node:path";

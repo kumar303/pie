@@ -26,15 +26,15 @@ export interface ResolveJitiCliOptions {
    * reachable; jiti is looked up as its peer.
    *
    * Used because pi ships as a standalone bundle (e.g. via Nix) where
-   * jiti lives under pi's own `node_modules/@mariozechner/jiti` and
-   * is only visible via sibling packages like `@mariozechner/pi-tui`
+   * jiti lives under pi's own `node_modules/jiti` and
+   * is only visible via sibling packages like `@earendil-works/pi-tui`
    * — which the extension imports, so its resolved location is a
    * reliable anchor.
    */
   anchorPackages?: string[];
   /**
-   * Injection point for tests: resolve a specifier (`@mariozechner/
-   * jiti/package.json`) from an anchor path. Defaults to
+   * Injection point for tests: resolve a specifier (`jiti/package.json`)
+   * from an anchor path. Defaults to
    * `createRequire(anchor).resolve(specifier)`. Tests can supply a
    * deterministic implementation that isn't polluted by vitest's
    * host-project module-path injection.
@@ -44,11 +44,11 @@ export interface ResolveJitiCliOptions {
 
 /**
  * Resolve the path to the jiti CLI (lib/jiti-cli.mjs). Pi bundles
- * `@mariozechner/jiti`, but we fall back to plain `jiti` if present.
+ * `jiti`, but we fall back to plain `jiti` if present.
  * Throws if neither is found.
  */
 export function resolveJitiCli(opts: ResolveJitiCliOptions = {}): string {
-  const candidates = ["@mariozechner/jiti/package.json", "jiti/package.json"];
+  const candidates = ["jiti/package.json"];
   const fromDir = opts.fromDir ?? dirname(fileURLToPath(import.meta.url));
   // When the caller supplies `anchorPackages` explicitly (including
   // an empty array), skip defaults — the caller knows better, and
@@ -77,13 +77,13 @@ export function resolveJitiCli(opts: ResolveJitiCliOptions = {}): string {
     }
   }
   throw new Error(
-    "could not resolve a jiti CLI (@mariozechner/jiti or jiti) " +
+    "could not resolve a jiti CLI " +
       `from ${fromDir} or anchors [${anchors.slice(1).join(", ") || "none"}]`,
   );
 }
 
 /**
- * Production anchor list. `@mariozechner/pi-tui` is a direct import
+ * Production anchor list. `@earendil-works/pi-tui` is a direct import
  * of this extension, so Node can always resolve it; we walk through
  * it to find jiti as a sibling — this is the case when pi is installed
  * via Nix or a similarly hermetic packaging.
@@ -91,7 +91,7 @@ export function resolveJitiCli(opts: ResolveJitiCliOptions = {}): string {
 function defaultAnchorPackages(): string[] {
   const here = createRequire(import.meta.url);
   const out: string[] = [];
-  for (const name of ["@mariozechner/pi-tui/package.json"]) {
+  for (const name of ["@earendil-works/pi-tui/package.json"]) {
     try {
       out.push(here.resolve(name));
     } catch {

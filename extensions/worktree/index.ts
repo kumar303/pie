@@ -20,7 +20,7 @@ import type {
   EditorTheme,
   Focusable,
   TUI,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import {
   CombinedAutocompleteProvider,
   Editor,
@@ -28,12 +28,12 @@ import {
   Key,
   matchesKey,
   truncateToWidth,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
   Theme,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { parseWorktreeArgs, SUBCOMMANDS } from "./parse.js";
 import {
   createConfigStore,

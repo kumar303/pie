@@ -13,7 +13,7 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   Theme,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
   Editor,
   type EditorTheme,
@@ -23,7 +23,7 @@ import {
   Key,
   type TUI,
   type Component,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import { createFileStore, ensureDefaults, type StoreIO } from "./store.js";
 
 // ── Constants ────────────────────────────────────────────────────────

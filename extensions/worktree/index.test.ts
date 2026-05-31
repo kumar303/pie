@@ -67,8 +67,8 @@ import { dirname, join } from "node:path";
 import type {
   ExtensionCommandContext,
   ExtensionUIContext,
-} from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import worktreeExtension, {
   type WorktreePi,
   createExtension,
@@ -557,9 +557,9 @@ describe("usage / help", () => {
 });
 
 describe("subcommand autocompletion", () => {
-  it("filters by prefix", () => {
+  it("filters by prefix", async () => {
     const h = setupExtension();
-    const items = h.pi.argumentCompletions("worktree", "ad");
+    const items = await h.pi.argumentCompletions("worktree", "ad");
     expect((items ?? []).map((i) => i.value)).toEqual(["add"]);
   });
 });
@@ -785,11 +785,13 @@ describe("subsequent runs", () => {
     // After registration, cached repos should be available for
     // autocompletion immediately.
     const items = h.pi.argumentCompletions("worktree", "add ");
-    expect(items).not.toBeNull();
-    const values = (items ?? []).map((i) => i.value);
-    expect(
-      values.some((v) => v.startsWith("add ") && v.includes("alpha")),
-    ).toBe(true);
+    expect(items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          value: expect.stringMatching(/^add .*alpha/),
+        }),
+      ]),
+    );
 
     // Now create a new repo; the background re-scan triggered on
     // load should pick it up.
@@ -915,7 +917,7 @@ describe("/worktree add", () => {
     expect(editorMock.calls).toEqual([]);
   });
 
-  it("autocompletes `add <repo>` to the full path when the leaf is ambiguous", () => {
+  it("autocompletes `add <repo>` to the full path when the leaf is ambiguous", async () => {
     // When two cached repos share a leaf name (e.g. ~/a/pie
     // and ~/b/pie), inserting just `pie` would force the
     // user to retype the full path on Enter because
@@ -927,7 +929,7 @@ describe("/worktree add", () => {
     const aPie = join(scanRoot, "alpha", "pie");
     const bPie = join(scanRoot, "beta", "pie");
     const h = setupConfiguredExtension({ cache: [aPie, bPie] });
-    const items = h.pi.argumentCompletions("worktree", "add pie");
+    const items = await h.pi.argumentCompletions("worktree", "add pie");
     expect(items).not.toBeNull();
     const values = (items ?? []).map((i) => i.value);
     expect(values).toEqual(
@@ -940,7 +942,7 @@ describe("/worktree add", () => {
     expect((items ?? []).every((i) => i.label === "pie")).toBe(true);
   });
 
-  it("keeps the bare-leaf value when the leaf is unique among ambiguous siblings", () => {
+  it("keeps the bare-leaf value when the leaf is unique among ambiguous siblings", async () => {
     // Mixed scenario: `pie` is duplicated, `pox` is unique.
     // Only the duplicates should switch to full-path values;
     // pox stays as a short leaf so the common case isn't
@@ -949,7 +951,7 @@ describe("/worktree add", () => {
     const bPie = join(scanRoot, "beta", "pie");
     const pox = join(scanRoot, "alpha", "pox");
     const h = setupConfiguredExtension({ cache: [aPie, bPie, pox] });
-    const items = h.pi.argumentCompletions("worktree", "add p");
+    const items = await h.pi.argumentCompletions("worktree", "add p");
     expect(items).not.toBeNull();
     const byPath = new Map(
       (items ?? []).map((i) => [i.description ?? "", i.value]),
@@ -959,7 +961,7 @@ describe("/worktree add", () => {
     expect(byPath.get(pox)).toBe("add pox ");
   });
 
-  it("autocompletes `add <repo>` ranking leaf matches above full-path matches", () => {
+  it("autocompletes `add <repo>` ranking leaf matches above full-path matches", async () => {
     // Asserts ordering rather than exclusion. Asserting that
     // `queue` is *absent* from the results would be path-
     // dependent: a tmp parent containing 'p' (e.g. /tmp/)
@@ -975,7 +977,7 @@ describe("/worktree add", () => {
         join(scanRoot, "queue"),
       ],
     });
-    const items = h.pi.argumentCompletions("worktree", "add pie");
+    const items = await h.pi.argumentCompletions("worktree", "add pie");
     expect(items).not.toBeNull();
     const values = (items ?? []).map((i) => i.value);
     // pie (exact leaf) ranks first; pie-incubator (leaf
@@ -1040,7 +1042,7 @@ describe("/worktree remove", () => {
     expect(err).toBeDefined();
   });
 
-  it("autocompletes branches based on existing worktree directories", () => {
+  it("autocompletes branches based on existing worktree directories", async () => {
     const repo = initRepo("pie");
     // Seed two worktrees at the canonical trees-dir layout
     // so the autocomplete (which reads that directory) sees
@@ -1055,7 +1057,7 @@ describe("/worktree remove", () => {
     });
 
     const h = setupConfiguredExtension({ cache: [repo] });
-    const items = h.pi.argumentCompletions("worktree", "remove pie ");
+    const items = await h.pi.argumentCompletions("worktree", "remove pie ");
     expect(items).not.toBeNull();
     const values = (items ?? []).map((i) => i.value);
     expect(values).toEqual(

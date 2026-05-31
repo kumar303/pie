@@ -94,8 +94,8 @@ import { tmpdir } from "node:os";
 import type {
   ExtensionCommandContext,
   ExtensionUIContext,
-} from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import gitExtension, {
   type GitPi,
   buildFileIndex,

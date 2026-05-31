@@ -11,8 +11,8 @@ import { join } from "node:path";
 import { resolveJitiCli, spawnServer } from "./spawn.ts";
 
 /**
- * Build a synthetic pnpm-like layout with `@mariozechner/pi-tui` and
- * `@mariozechner/jiti` side by side. Returns the absolute path to
+ * Build a synthetic pnpm-like layout with `@earendil-works/pi-tui` and
+ * `jiti` side by side. Returns the absolute path to
  * pi-tui's package.json — the `anchor` the production code uses.
  *
  * realpathSync resolves the macOS `/var` ↔ `/private/var` symlink so
@@ -20,18 +20,18 @@ import { resolveJitiCli, spawnServer } from "./spawn.ts";
  */
 function makePnpmLikeFixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "vscbc-spawn-")));
-  const nm = join(root, "node_modules", "@mariozechner");
-  const piTuiDir = join(nm, "pi-tui");
+  const nm = join(root, "node_modules");
+  const piTuiDir = join(nm, "@earendil-works", "pi-tui");
   mkdirSync(piTuiDir, { recursive: true });
   writeFileSync(
     join(piTuiDir, "package.json"),
-    JSON.stringify({ name: "@mariozechner/pi-tui" }),
+    JSON.stringify({ name: "@earendil-works/pi-tui" }),
   );
   const jitiDir = join(nm, "jiti");
   mkdirSync(join(jitiDir, "lib"), { recursive: true });
   writeFileSync(
     join(jitiDir, "package.json"),
-    JSON.stringify({ name: "@mariozechner/jiti" }),
+    JSON.stringify({ name: "jiti" }),
   );
   const cli = join(jitiDir, "lib", "jiti-cli.mjs");
   writeFileSync(cli, "// fake");
@@ -76,8 +76,8 @@ describe("resolveJitiCli", () => {
     const anchor = fixture.piTuiPkgPath;
     const resolve = fakeResolver({
       // Primary anchor (fromDir/_anchor.js) fails for both specifiers.
-      // pi-tui anchor resolves @mariozechner/jiti/package.json only.
-      [`${anchor}||@mariozechner/jiti/package.json`]: fixture.jitiPkgPath,
+      // pi-tui anchor resolves jiti/package.json only.
+      [`${anchor}||jiti/package.json`]: fixture.jitiPkgPath,
     });
     const cli = resolveJitiCli({
       fromDir: "/nowhere",
@@ -93,8 +93,7 @@ describe("resolveJitiCli", () => {
     // We encode that by only stubbing fromDir; the anchor rule is absent
     // so would throw — the test asserts the anchor was never consulted.
     const resolve = fakeResolver({
-      [`/some/dev/path/_anchor.js||@mariozechner/jiti/package.json`]:
-        fixture.jitiPkgPath,
+      [`/some/dev/path/_anchor.js||jiti/package.json`]: fixture.jitiPkgPath,
     });
     const cli = resolveJitiCli({
       fromDir: "/some/dev/path",
@@ -105,13 +104,13 @@ describe("resolveJitiCli", () => {
     // Called once for fromDir; never reached the pi-tui anchor.
     expect(resolve).toHaveBeenCalledTimes(1);
     expect(resolve).toHaveBeenCalledWith(
-      "@mariozechner/jiti/package.json",
+      "jiti/package.json",
       "/some/dev/path/_anchor.js",
     );
   });
 
-  it("falls back to plain `jiti` after `@mariozechner/jiti` fails", () => {
-    // Rename the scoped pkg to plain 'jiti' in the fixture.
+  it("resolves plain `jiti` from an anchor", () => {
+    // Simulate plain jiti in the fixture.
     const plain = join(fixture.root, "node_modules", "jiti");
     mkdirSync(join(plain, "lib"), { recursive: true });
     writeFileSync(
@@ -141,7 +140,7 @@ describe("resolveJitiCli", () => {
 
     const anchor = fixture.piTuiPkgPath;
     const resolve = fakeResolver({
-      [`${anchor}||@mariozechner/jiti/package.json`]: fixture.jitiPkgPath,
+      [`${anchor}||jiti/package.json`]: fixture.jitiPkgPath,
     });
     const cli = resolveJitiCli({
       fromDir: "/nowhere",

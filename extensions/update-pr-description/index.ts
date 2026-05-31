@@ -12,8 +12,8 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+} from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { exec as execCb } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -180,9 +180,10 @@ async function defaultEditPrompt(
     onCancel: () => void,
   ) => unknown;
   try {
-    const mod = (await import("@mariozechner/pi-coding-agent")) as unknown as {
-      ExtensionEditorComponent: typeof ExtensionEditorComponent;
-    };
+    const mod =
+      (await import("@earendil-works/pi-coding-agent")) as unknown as {
+        ExtensionEditorComponent: typeof ExtensionEditorComponent;
+      };
     ExtensionEditorComponent = mod.ExtensionEditorComponent;
     if (!ExtensionEditorComponent) throw new Error("missing export");
   } catch (err) {
@@ -491,12 +492,12 @@ async function showDiffAndConfirm(ui: MockUi, diff: string): Promise<boolean> {
   // never forces a runtime dependency on the peer package. Only the
   // import itself is guarded — any error from the render factory or
   // `ui.custom` is a real bug and must propagate to the caller.
-  let tui: typeof import("@mariozechner/pi-tui");
+  let tui: typeof import("@earendil-works/pi-tui");
   try {
-    tui = await import("@mariozechner/pi-tui");
+    tui = await import("@earendil-works/pi-tui");
   } catch (err) {
     ui.notify(
-      `Could not load @mariozechner/pi-tui (${
+      `Could not load @earendil-works/pi-tui (${
         err instanceof Error ? err.message : String(err)
       }); falling back to a plain confirm dialog.`,
       "warning",

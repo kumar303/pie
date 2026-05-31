@@ -13,9 +13,14 @@
  * so this extension uses Ctrl+Shift+Y to avoid conflicts.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { Key, matchesKey, Text, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import {
+  Key,
+  matchesKey,
+  Text,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 
 /**
  * Minimal subset of the Theme API the list view depends on. We type against
