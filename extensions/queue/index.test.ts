@@ -1181,41 +1181,32 @@ describe("submitting a queue runs it via pi.sendUserMessage and agent_end", () =
 });
 
 describe("QueueRunner subsequent-idle waits and post-completion behavior", () => {
-  it("blocks on idle BEFORE sending each subsequent prompt (not just the first)", async () => {
+  it("does not wait for idle inside agent_end before sending subsequent prompts", async () => {
     const h = setupExtension();
     h.store.save("q", ["A", "B", "C"]);
     const ui = await openListUi(h, "q");
-    // Start with the agent busy. The runner will park on every
-    // waitForIdle until we explicitly let it through.
+    // Starting a queue from a command still waits for idle before the
+    // first prompt.
     ui.ctx.exitIdleState();
     ui.fireInput(ENTER);
-    // Without idle, the first prompt has not been sent.
     await waitFor(
       () => /scheduled/.test(ui.ctx.ui.statuses.get("queue") ?? ""),
       { what: "runner to reach scheduled state" },
     );
     expect(h.pi.sentMessages).toEqual([]);
-    // Granting idle releases exactly the first prompt.
     ui.ctx.enterIdleState();
     await waitFor(() => h.pi.sentMessages.length === 1);
-    // Simulate the agent now executing prompt 1: busy again.
+
+    // In Pi 0.78, agent_end handlers run before the runtime becomes
+    // idle. Waiting for idle from inside agent_end deadlocks the agent
+    // loop, so the queue must enqueue the follow-up directly and return.
     ui.ctx.exitIdleState();
     await h.pi.fire("agent_end", {}, ui.ctx);
-    // Even though agent_end fired, the runner must wait for idle
-    // before sending B — we haven't granted it, so no new prompt yet.
-    await new Promise((r) => setImmediate(r));
-    expect(h.pi.sentMessages.length).toBe(1);
-    // Granting idle releases prompt 2.
-    ui.ctx.enterIdleState();
     await waitFor(() => h.pi.sentMessages.length === 2);
     expect(h.pi.sentMessages[1].content).toContain("B");
-    // Same dance for the third prompt: busy → agent_end → still blocked
-    // → idle → sent.
+
     ui.ctx.exitIdleState();
     await h.pi.fire("agent_end", {}, ui.ctx);
-    await new Promise((r) => setImmediate(r));
-    expect(h.pi.sentMessages.length).toBe(2);
-    ui.ctx.enterIdleState();
     await waitFor(() => h.pi.sentMessages.length === 3);
     expect(h.pi.sentMessages[2].content).toContain("C");
   });

@@ -356,7 +356,7 @@ export class QueueRunner {
     this.ctx.setStatus(
       `/queue: scheduled (${prompts.length} prompts) \u2014 /queue :abort to cancel`,
     );
-    await this.sendNext();
+    await this.sendNext({ waitForIdle: true });
   }
 
   async onAgentEnd(): Promise<void> {
@@ -365,7 +365,7 @@ export class QueueRunner {
       this.active = false;
       this.ctx.setStatus(undefined);
     } else {
-      await this.sendNext();
+      void this.sendNext({ waitForIdle: false });
     }
   }
 
@@ -379,8 +379,10 @@ export class QueueRunner {
     return this.active;
   }
 
-  private async sendNext(): Promise<void> {
-    await this.ctx.waitForIdle();
+  private async sendNext(options: { waitForIdle: boolean }): Promise<void> {
+    if (options.waitForIdle) {
+      await this.ctx.waitForIdle();
+    }
     if (!this.active) return;
     const i = this.nextIndex;
     this.ctx.sendUserMessage(this.prompts[i]);
