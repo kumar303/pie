@@ -15,6 +15,7 @@ All code is licensed under [WTFPL](LICENSE).
 | Extension                                                    | Description                                                                                                                |
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
 | [brain](extensions/brain/)                                   | Multi-task ongoing pi sessions. Invoke with `/brain`.                                                                      |
+| [debug-keys](extensions/debug-keys/)                         | Print raw terminal key codes for extension development. Invoke with `/debug-keys`.                                         |
 | [git](extensions/git/)                                       | View git diffs and re-prompt the agent. Invoke with `/git`.                                                                |
 | [no-sleep-while-working](extensions/no-sleep-while-working/) | Prevents your Mac from sleeping while pi is actively working on a task.                                                    |
 | [pie-kumar303-config](extensions/pie-kumar303-config/)       | Extension manager for this repo. Invoke with `/pie-kumar303-config` to selectively install/remove extensions via symlinks. |
