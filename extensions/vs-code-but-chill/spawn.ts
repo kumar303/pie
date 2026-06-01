@@ -21,15 +21,13 @@ export interface ResolveJitiCliOptions {
    */
   fromDir?: string;
   /**
-   * Fallback anchor `package.json` paths to retry resolution from.
-   * Each entry is a concrete package.json that's guaranteed to be
-   * reachable; jiti is looked up as its peer.
+   * Fallback anchor module paths to retry resolution from. Each entry
+   * is a concrete file path that's guaranteed to be reachable; jiti is
+   * looked up as its peer.
    *
    * Used because pi ships as a standalone bundle (e.g. via Nix) where
-   * jiti lives under pi's own `node_modules/jiti` and
-   * is only visible via sibling packages like `@earendil-works/pi-tui`
-   * — which the extension imports, so its resolved location is a
-   * reliable anchor.
+   * jiti lives under pi's own `node_modules/jiti` and is only visible
+   * via sibling packages from the pi runtime.
    */
   anchorPackages?: string[];
   /**
@@ -83,21 +81,33 @@ export function resolveJitiCli(opts: ResolveJitiCliOptions = {}): string {
 }
 
 /**
- * Production anchor list. `@earendil-works/pi-tui` is a direct import
- * of this extension, so Node can always resolve it; we walk through
- * it to find jiti as a sibling — this is the case when pi is installed
- * via Nix or a similarly hermetic packaging.
+ * Production anchor list. Pi 0.78 keeps `jiti` under
+ * `@earendil-works/pi-coding-agent`, which is ESM-exported but does
+ * not expose its package.json to `createRequire().resolve()`. Resolve
+ * the runtime module with `import.meta.resolve()` and use that concrete
+ * file as the anchor.
  */
 function defaultAnchorPackages(): string[] {
   const here = createRequire(import.meta.url);
   const out: string[] = [];
-  for (const name of ["@earendil-works/pi-tui/package.json"]) {
+
+  for (const name of [
+    "@earendil-works/pi-coding-agent",
+    "@earendil-works/pi-tui/package.json",
+  ]) {
     try {
-      out.push(here.resolve(name));
+      const resolved =
+        name === "@earendil-works/pi-coding-agent"
+          ? import.meta.resolve(name)
+          : here.resolve(name);
+      out.push(
+        resolved.startsWith("file:") ? fileURLToPath(resolved) : resolved,
+      );
     } catch {
-      // ignore; the caller will try remaining anchors.
+      // Expected in some install layouts; the caller will try remaining anchors.
     }
   }
+
   return out;
 }
 

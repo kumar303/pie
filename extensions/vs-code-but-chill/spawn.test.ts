@@ -87,6 +87,25 @@ describe("resolveJitiCli", () => {
     expect(cli).toBe(fixture.expectedCli);
   });
 
+  it("finds jiti from pi-coding-agent's default runtime anchor", () => {
+    // Pi 0.78 moved jiti under @earendil-works/pi-coding-agent. The
+    // extension imports pi-tui at runtime too, but pi-tui no longer has
+    // jiti as a resolvable sibling in installed package layouts.
+    const resolve = vi.fn((specifier: string, anchor: string) => {
+      if (
+        specifier === "jiti/package.json" &&
+        anchor.includes("pi-coding-agent")
+      ) {
+        return fixture.jitiPkgPath;
+      }
+      throw new Error(`Cannot find module '${specifier}' from '${anchor}'`);
+    });
+
+    const cli = resolveJitiCli({ fromDir: "/nowhere", resolve });
+
+    expect(cli).toBe(fixture.expectedCli);
+  });
+
   it("prefers the primary fromDir resolution when it succeeds", () => {
     const anchor = fixture.piTuiPkgPath;
     // Both resolvers can find jiti, but fromDir should win (tried first).
