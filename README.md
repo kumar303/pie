@@ -10,6 +10,18 @@ Yolo. Some work well, some are more experimental. They come with **no guarantee 
 
 All code is licensed under [WTFPL](LICENSE).
 
+## Install
+
+Install pie as a pi package from git:
+
+```bash
+pi install https://github.com/kumar303/pie
+```
+
+This clones the repo and loads the config extension. Then use `/pie-kumar303-config` to selectively install the other extensions and skills.
+
+Run `pi update` to pull the latest changes.
+
 ## Extensions
 
 | Extension                                                    | Description                                                                                                                |
@@ -25,17 +37,11 @@ All code is licensed under [WTFPL](LICENSE).
 | [worktree](extensions/worktree/)                             | Manage git worktrees. Invoke with `/worktree`.                                                                             |
 | [yanked](extensions/yanked/)                                 | Yank (save) the current prompt for later.                                                                                  |
 
-## Install
+## Skills
 
-Install pie as a pi package from git:
-
-```bash
-pi install https://github.com/kumar303/pie
-```
-
-This clones the repo and loads the config extension. Then use `/pie-kumar303-config` to selectively install the other extensions.
-
-Run `pi update` to pull the latest changes.
+| Skill                                    | Description                                                                                                          |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| [test-break-fix](skills/test-break-fix/) | Review tests on a PR by temporarily breaking the code under test and verifying each new test fails before it passes. |
 
 ## Development
 

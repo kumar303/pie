@@ -13,9 +13,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   discoverExtensions,
+  discoverSkills,
+  formatChooserLeftLines,
   getInstallState,
   installExtension,
+  installSkill,
   removeExtension,
+  removeSkill,
+  removeSkillFrontmatterRuleFromRenderedMarkdown,
 } from "./index.ts";
 
 /** Fail the test if an unexpected error is reported. */
@@ -97,6 +102,101 @@ describe("discoverExtensions", () => {
     expect(errors.length).toBe(1);
     expect(errors[0]).toMatch(/bad-readme/);
     expect(errors[0]).toMatch(/README/);
+  });
+});
+
+describe("discoverSkills", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pie-config-test-"));
+    mkdirSync(join(tmpDir, "skills"));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("lists skill directories that contain SKILL.md", () => {
+    mkdirSync(join(tmpDir, "skills", "test-break-fix"));
+    writeFileSync(
+      join(tmpDir, "skills", "test-break-fix", "SKILL.md"),
+      "---\nname: test-break-fix\ndescription: Review tests.\n---\n\nBody",
+    );
+    mkdirSync(join(tmpDir, "skills", "not-a-skill"));
+
+    const skills = discoverSkills(join(tmpDir, "skills"), failOnError);
+    expect(skills).toEqual([
+      {
+        name: "test-break-fix",
+        path: join(tmpDir, "skills", "test-break-fix"),
+        readme:
+          "---\nname: test-break-fix\ndescription: Review tests.\n---\n\nBody",
+      },
+    ]);
+  });
+
+  it("throws when skills directory does not exist", () => {
+    expect(() => discoverSkills(join(tmpDir, "missing"), failOnError)).toThrow(
+      /does not exist/,
+    );
+  });
+});
+
+describe("formatChooserLeftLines", () => {
+  it("groups extensions and skills under separate headings", () => {
+    const lines = formatChooserLeftLines([
+      {
+        name: "git",
+        path: "/repo/extensions/git",
+        type: "extension",
+        checked: false,
+        wasInstalled: false,
+      },
+      {
+        name: "test-break-fix",
+        path: "/repo/skills/test-break-fix",
+        type: "skill",
+        checked: true,
+        wasInstalled: true,
+      },
+    ]);
+
+    expect(lines).toEqual([
+      "Extensions",
+      "  ☐ git",
+      "Skills",
+      "  ☑ test-break-fix",
+    ]);
+  });
+});
+
+describe("removeSkillFrontmatterRuleFromRenderedMarkdown", () => {
+  it("removes only the rendered horizontal rule for skill frontmatter", () => {
+    const markdown =
+      "---\nname: test-break-fix\ndescription: Review tests.\n---\n\nYou are assessing tests.";
+
+    expect(
+      removeSkillFrontmatterRuleFromRenderedMarkdown(markdown, [
+        "────────────────",
+        "name: test-break-fix",
+        "description: Review tests.",
+        "You are assessing tests.",
+      ]),
+    ).toEqual([
+      "name: test-break-fix",
+      "description: Review tests.",
+      "You are assessing tests.",
+    ]);
+  });
+
+  it("leaves rendered markdown unchanged when there is no frontmatter", () => {
+    expect(
+      removeSkillFrontmatterRuleFromRenderedMarkdown("# Title\n\nBody", [
+        "Title",
+        "Body",
+      ]),
+    ).toEqual(["Title", "Body"]);
   });
 });
 
@@ -240,6 +340,43 @@ describe("installExtension", () => {
     const result = installExtension("git", extPath, agentExtDir);
     expect(result).toBeNull();
     expect(readlinkSync(join(agentExtDir, "git"))).toBe(extPath);
+  });
+});
+
+describe("installSkill/removeSkill", () => {
+  let tmpDir: string;
+  let repoSkillsDir: string;
+  let agentSkillsDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pie-config-test-"));
+    repoSkillsDir = join(tmpDir, "repo", "skills");
+    agentSkillsDir = join(tmpDir, "agent", "skills");
+    mkdirSync(repoSkillsDir, { recursive: true });
+    mkdirSync(agentSkillsDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("creates and removes a symlink from the Pi agent skills directory to the repo skill", () => {
+    const skillPath = join(repoSkillsDir, "test-break-fix");
+    mkdirSync(skillPath);
+    writeFileSync(join(skillPath, "SKILL.md"), "---\nname: test\n---\n");
+
+    expect(
+      installSkill("test-break-fix", skillPath, agentSkillsDir),
+    ).toBeNull();
+    expect(
+      lstatSync(join(agentSkillsDir, "test-break-fix")).isSymbolicLink(),
+    ).toBe(true);
+    expect(readlinkSync(join(agentSkillsDir, "test-break-fix"))).toBe(
+      skillPath,
+    );
+
+    expect(removeSkill("test-break-fix", skillPath, agentSkillsDir)).toBeNull();
+    expect(existsSync(join(agentSkillsDir, "test-break-fix"))).toBe(false);
   });
 });
 

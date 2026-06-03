@@ -2,11 +2,11 @@
  * Pie Config Extension
  *
  * Invoke with `/pie-kumar303-config`. Shows a two-panel UI:
- * - Left: checkbox list of extensions from this repo
- * - Right: README.md preview for the highlighted extension
+ * - Left: checkbox list of extensions and skills from this repo
+ * - Right: README.md/SKILL.md preview for the highlighted item
  *
  * Pressing Enter applies changes: creates symlinks for newly checked
- * extensions and removes symlinks for unchecked ones.
+ * items and removes symlinks for unchecked ones.
  */
 
 import {
@@ -32,10 +32,18 @@ import {
 
 // ─── Public helpers (exported for tests) ─────────────────────────
 
+export type ResourceType = "extension" | "skill";
+
 export interface ExtensionInfo {
   name: string;
   path: string;
   readme?: string;
+}
+
+export interface ManagedItem extends ExtensionInfo {
+  type: ResourceType;
+  checked: boolean;
+  wasInstalled: boolean;
 }
 
 const CONFIG_EXT_NAME = "pie-kumar303-config";
@@ -76,6 +84,56 @@ export function discoverExtensions(
 }
 
 /**
+ * Discover Pi skills in the given directory. Skills are directories containing
+ * SKILL.md, which Pi can load from ~/.pi/agent/skills when symlinked there.
+ */
+export function removeSkillFrontmatterRuleFromRenderedMarkdown(
+  markdown: string,
+  renderedLines: string[],
+): string[] {
+  if (!markdown.startsWith("---\n")) return renderedLines;
+  if (!renderedLines[0]) return renderedLines;
+
+  const firstLine = stripAnsi(renderedLines[0]).trim();
+  if (!firstLine || ![...firstLine].every((char) => char === "─")) {
+    return renderedLines;
+  }
+
+  return renderedLines.slice(1);
+}
+
+export function discoverSkills(
+  skillsDir: string,
+  onError: (message: string) => void,
+): ExtensionInfo[] {
+  if (!existsSync(skillsDir)) {
+    throw new Error(`Skills directory does not exist: ${skillsDir}`);
+  }
+
+  const entries = readdirSync(skillsDir, { withFileTypes: true });
+  const result: ExtensionInfo[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+
+    const skillPath = join(skillsDir, entry.name);
+    const skillMdPath = join(skillPath, "SKILL.md");
+    if (!existsSync(skillMdPath)) continue;
+
+    let readme: string | undefined;
+    try {
+      readme = readFileSync(skillMdPath, "utf-8");
+    } catch (err: any) {
+      onError(`Failed to read SKILL.md for ${entry.name}: ${err.message}`);
+    }
+
+    result.push({ name: entry.name, path: skillPath, readme });
+  }
+
+  return result.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
  * Check if an extension is installed (symlinked) in the agent extensions dir.
  * Returns true only if a symlink exists AND points to the given extPath.
  */
@@ -97,7 +155,7 @@ export function getInstallState(
  * Install an extension by creating a symlink.
  * Returns null on success or an error message string.
  */
-export function installExtension(
+function installSymlink(
   name: string,
   extPath: string,
   agentExtDir: string,
@@ -140,7 +198,7 @@ export function installExtension(
  * to the expected extPath (from this repo).
  * Returns null on success or an error message string.
  */
-export function removeExtension(
+function removeSymlink(
   name: string,
   extPath: string,
   agentExtDir: string,
@@ -170,6 +228,62 @@ export function removeExtension(
   }
 }
 
+export function installExtension(
+  name: string,
+  extPath: string,
+  agentExtDir: string,
+): string | null {
+  return installSymlink(name, extPath, agentExtDir);
+}
+
+export function removeExtension(
+  name: string,
+  extPath: string,
+  agentExtDir: string,
+): string | null {
+  return removeSymlink(name, extPath, agentExtDir);
+}
+
+export function installSkill(
+  name: string,
+  skillPath: string,
+  agentSkillsDir: string,
+): string | null {
+  return installSymlink(name, skillPath, agentSkillsDir);
+}
+
+export function removeSkill(
+  name: string,
+  skillPath: string,
+  agentSkillsDir: string,
+): string | null {
+  return removeSymlink(name, skillPath, agentSkillsDir);
+}
+
+export function formatChooserLeftLines(
+  items: ManagedItem[],
+  cursor = -1,
+  decorate?: (line: string, item: ManagedItem, index: number) => string,
+): string[] {
+  const lines: string[] = [];
+
+  for (const type of ["extension", "skill"] satisfies ResourceType[]) {
+    const group = items.filter((item) => item.type === type);
+    if (group.length === 0) continue;
+
+    lines.push(type === "extension" ? "Extensions" : "Skills");
+    for (const item of group) {
+      const index = items.indexOf(item);
+      const checkbox = item.checked ? "☑" : "☐";
+      const prefix = index === cursor ? "▸ " : "  ";
+      const line = `${prefix}${checkbox} ${item.name}`;
+      lines.push(decorate ? decorate(line, item, index) : line);
+    }
+  }
+
+  return lines;
+}
+
 /** lstatSync but returns false instead of throwing on ENOENT */
 function lstatExistsSafe(p: string): boolean {
   try {
@@ -182,22 +296,22 @@ function lstatExistsSafe(p: string): boolean {
 
 // ─── TUI Component ───────────────────────────────────────────────
 
-interface ExtState {
-  name: string;
-  path: string;
-  readme?: string;
-  checked: boolean;
-  wasInstalled: boolean; // original state on load
-}
-
 function getRepoExtensionsDir(): string {
   // Walk up from this file to find the repo root extensions dir
   // This file is at extensions/pie-kumar303-config/index.ts
   return resolve(dirname(new URL(import.meta.url).pathname), "..");
 }
 
+function getRepoSkillsDir(): string {
+  return resolve(getRepoExtensionsDir(), "..", "skills");
+}
+
 function getAgentExtensionsDir(): string {
   return join(homedir(), ".pi", "agent", "extensions");
+}
+
+function getAgentSkillsDir(): string {
+  return join(homedir(), ".pi", "agent", "skills");
 }
 
 export default function (pi: ExtensionAPI) {
@@ -205,26 +319,49 @@ export default function (pi: ExtensionAPI) {
     description: "Manage pie-kumar303 extension symlinks",
     handler: async (_args, ctx) => {
       const repoExtDir = getRepoExtensionsDir();
+      const repoSkillsDir = getRepoSkillsDir();
       const agentExtDir = getAgentExtensionsDir();
+      const agentSkillsDir = getAgentSkillsDir();
       const extensions = discoverExtensions(repoExtDir, (err) =>
         ctx.ui.notify(err, "error"),
       );
+      const skills = discoverSkills(repoSkillsDir, (err) =>
+        ctx.ui.notify(err, "error"),
+      );
 
-      if (extensions.length === 0) {
-        ctx.ui.notify("No extensions found in this repo.", "info");
+      if (extensions.length === 0 && skills.length === 0) {
+        ctx.ui.notify("No extensions or skills found in this repo.", "info");
         return;
       }
 
-      const items: ExtState[] = extensions.map((ext) => {
-        const installed = getInstallState(ext.name, ext.path, agentExtDir);
-        return {
-          name: ext.name,
-          path: ext.path,
-          readme: ext.readme,
-          checked: installed,
-          wasInstalled: installed,
-        };
-      });
+      const items: ManagedItem[] = [
+        ...extensions.map((ext) => {
+          const installed = getInstallState(ext.name, ext.path, agentExtDir);
+          return {
+            name: ext.name,
+            path: ext.path,
+            readme: ext.readme,
+            type: "extension" as const,
+            checked: installed,
+            wasInstalled: installed,
+          };
+        }),
+        ...skills.map((skill) => {
+          const installed = getInstallState(
+            skill.name,
+            skill.path,
+            agentSkillsDir,
+          );
+          return {
+            name: skill.name,
+            path: skill.path,
+            readme: skill.readme,
+            type: "skill" as const,
+            checked: installed,
+            wasInstalled: installed,
+          };
+        }),
+      ];
 
       const hasChanges = await ctx.ui.custom<boolean>(
         (tui, theme, _kb, done) => {
@@ -262,7 +399,7 @@ export default function (pi: ExtensionAPI) {
                   theme.fg(
                     "accent",
                     theme.bold(
-                      " https://github.com/kumar303/pie - manage extensions",
+                      " https://github.com/kumar303/pie - manage extensions & skills",
                     ),
                   ),
                   width,
@@ -273,23 +410,18 @@ export default function (pi: ExtensionAPI) {
               );
 
               // Build left panel lines
-              const leftLines: string[] = [];
-              for (let i = 0; i < items.length; i++) {
-                const item = items[i];
-                const isCursor = i === cursor;
-                const checkbox = item.checked ? "☑" : "☐";
-                const label = `${checkbox} ${item.name}`;
+              const leftLines = formatChooserLeftLines(
+                items,
+                cursor,
+                (line, _item, index) => {
+                  if (index === cursor) {
+                    return theme.fg("accent", theme.bold(line));
+                  }
+                  return line;
+                },
+              ).map((line) => truncateToWidth(line, leftWidth));
 
-                let line: string;
-                if (isCursor) {
-                  line = theme.fg("accent", theme.bold(`▸ ${label}`));
-                } else {
-                  line = `  ${label}`;
-                }
-                leftLines.push(truncateToWidth(line, leftWidth));
-              }
-
-              // Build right panel lines (README preview)
+              // Build right panel lines (README/SKILL.md preview)
               const currentItem = items[cursor];
               let rightLines: string[] = [];
 
@@ -300,10 +432,16 @@ export default function (pi: ExtensionAPI) {
                 );
                 if (md) {
                   const rendered = md.render(rightWidth);
-                  rightLines = rendered;
+                  rightLines =
+                    currentItem.type === "skill"
+                      ? removeSkillFrontmatterRuleFromRenderedMarkdown(
+                          currentItem.readme,
+                          rendered,
+                        )
+                      : rendered;
                 }
               } else {
-                rightLines = [theme.fg("dim", "(no README.md)")];
+                rightLines = [theme.fg("dim", "(no preview)")];
               }
 
               // Clamp scroll
@@ -449,15 +587,22 @@ export default function (pi: ExtensionAPI) {
       let removed = 0;
 
       for (const item of items) {
+        const install =
+          item.type === "extension" ? installExtension : installSkill;
+        const remove =
+          item.type === "extension" ? removeExtension : removeSkill;
+        const targetDir =
+          item.type === "extension" ? agentExtDir : agentSkillsDir;
+
         if (item.checked && !item.wasInstalled) {
-          const err = installExtension(item.name, item.path, agentExtDir);
+          const err = install(item.name, item.path, targetDir);
           if (err) {
             errors.push(err);
           } else {
             installed++;
           }
         } else if (!item.checked && item.wasInstalled) {
-          const err = removeExtension(item.name, item.path, agentExtDir);
+          const err = remove(item.name, item.path, targetDir);
           if (err) {
             errors.push(err);
           } else {
@@ -499,6 +644,10 @@ export default function (pi: ExtensionAPI) {
  * Inline to avoid importing from pi-tui at module level for tests.
  */
 function visibleWidthOf(s: string): number {
+  return stripAnsi(s).length;
+}
+
+function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
+  return s.replace(/\x1b\[[0-9;]*m/g, "");
 }
