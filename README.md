@@ -39,9 +39,10 @@ Run `pi update` to pull the latest changes.
 
 ## Skills
 
-| Skill                                    | Description                                                                                                          |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| [test-break-fix](skills/test-break-fix/) | Review tests on a PR by temporarily breaking the code under test and verifying each new test fails before it passes. |
+| Skill                                    | Description                                         |
+| ---------------------------------------- | --------------------------------------------------- |
+| [test-break-fix](skills/test-break-fix/) | Break the code, make sure tests fail, fix the code. |
+| [test-writing](skills/test-writing/)     | Write high quality automated tests.                 |
 
 ## Development
 
