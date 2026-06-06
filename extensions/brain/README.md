@@ -9,7 +9,7 @@ If any are still waiting for `pi` results, it shows a spinner and streams the `p
 
 My `$EDITOR` is set to `code` (VS Code) and I always run `pi` in an integrated terminal.
 I'm pretty sure `/brain` will only work for you if you have a similar setup.
-It switches projects by invoking `$EDITOR` on the directory.
+It switches projects by invoking `$BRAIN_EDITOR` on the directory when set, otherwise falling back to `$EDITOR`.
 
 ```
  ▶ pie [main]                           │   Logs

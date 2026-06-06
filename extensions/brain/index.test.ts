@@ -343,6 +343,8 @@ function makeSpawnSyncMock(opts?: {
 
 let tmpDir: string;
 let originalBrainDir: string | undefined;
+let originalEditor: string | undefined;
+let originalBrainEditor: string | undefined;
 
 function setEnv(dir: string) {
   process.env.PI_BRAIN_DIR = dir;
@@ -357,6 +359,8 @@ function mkBrainDir(): string {
 
 beforeEach(() => {
   originalBrainDir = process.env.PI_BRAIN_DIR;
+  originalEditor = process.env.EDITOR;
+  originalBrainEditor = process.env.BRAIN_EDITOR;
   tmpDir = mkBrainDir();
   setEnv(tmpDir);
 });
@@ -364,6 +368,10 @@ beforeEach(() => {
 afterEach(() => {
   if (originalBrainDir === undefined) delete process.env.PI_BRAIN_DIR;
   else process.env.PI_BRAIN_DIR = originalBrainDir;
+  if (originalEditor === undefined) delete process.env.EDITOR;
+  else process.env.EDITOR = originalEditor;
+  if (originalBrainEditor === undefined) delete process.env.BRAIN_EDITOR;
+  else process.env.BRAIN_EDITOR = originalBrainEditor;
   try {
     rmSync(tmpDir, { recursive: true, force: true });
   } catch {
@@ -1214,6 +1222,30 @@ describe("/brain ENTER opens directory", () => {
     // Either via `/usr/bin/open -a` (mac GUI editor) or directly via $EDITOR.
     // The absolute path of /home/user/alpha must appear in args.
     expect(h.spawn.calls[0].args.join(" ")).toContain("/home/user/alpha");
+  });
+
+  it("uses BRAIN_EDITOR instead of EDITOR when it is set", async () => {
+    process.env.BRAIN_EDITOR = "brain-editor";
+    process.env.EDITOR = "regular-editor";
+    const { h, ui } = await seedAndOpenUi();
+
+    ui.fireInput(ENTER);
+
+    expect(h.spawn.calls).toHaveLength(1);
+    expect(h.spawn.calls[0].cmd).toBe("brain-editor");
+    expect(h.spawn.calls[0].args).toEqual(["/home/user/alpha"]);
+  });
+
+  it("falls back to EDITOR when BRAIN_EDITOR is not set", async () => {
+    delete process.env.BRAIN_EDITOR;
+    process.env.EDITOR = "regular-editor";
+    const { h, ui } = await seedAndOpenUi();
+
+    ui.fireInput(ENTER);
+
+    expect(h.spawn.calls).toHaveLength(1);
+    expect(h.spawn.calls[0].cmd).toBe("regular-editor");
+    expect(h.spawn.calls[0].args).toEqual(["/home/user/alpha"]);
   });
 
   it("publishes sessions_changed and writes a recordFocus entry", async () => {

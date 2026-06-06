@@ -303,7 +303,7 @@ function openInEditor(
   ctx: ExtensionContext,
   spawnSync: typeof realSpawnSync,
 ): void {
-  const editor = process.env.EDITOR || "vi";
+  const editor = process.env.BRAIN_EDITOR || process.env.EDITOR || "vi";
   const absolutePath = resolve(dir);
 
   try {
