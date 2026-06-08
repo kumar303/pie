@@ -57,3 +57,7 @@ The agent will suggest a commit message and you can edit it before committing.
 ## Staged git command
 
 Because adding selected files is difficult on the command line, this feature lets you write a command like `git commit {}` where `{}` is replaced with selected files. The command only runs after you press enter.
+
+## Installation
+
+This is a `pi` extension. Run [`/pie-kumar303-config`](../../README.md#install) to install it.

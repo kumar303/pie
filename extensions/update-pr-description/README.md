@@ -59,3 +59,7 @@ Because of tool conflicts, you have to first run `/pie-kumar303-config` to disab
 ```
 pi -e ./extensions/update-pr-description/
 ```
+
+## Installation
+
+This is a `pi` extension. Run [`/pie-kumar303-config`](../../README.md#install) to install it.

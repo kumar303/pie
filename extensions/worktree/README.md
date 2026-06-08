@@ -51,3 +51,7 @@ against repos discovered under your scan directories.
 - When two scan directories contain a repo with the same name,
   the full path is inserted instead so the picked item is
   always unambiguously resolvable.
+
+## Installation
+
+This is a `pi` extension. Run [`/pie-kumar303-config`](../../README.md#install) to install it.

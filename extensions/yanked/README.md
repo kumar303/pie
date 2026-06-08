@@ -19,3 +19,7 @@ pi -e ./extensions/yanked/
 # Run tests
 pnpm test -- extensions/yanked/
 ```
+
+## Installation
+
+This is a `pi` extension. Run [`/pie-kumar303-config`](../../README.md#install) to install it.

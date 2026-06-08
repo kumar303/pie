@@ -4,7 +4,7 @@
 pie[xtensions, agents, skills, and stuff]
 ```
 
-My daily-use extensions for [pi](https://pi.dev), a customizable coding agent.
+My daily-use extensions for [`pi`](https://pi.dev), a customizable coding agent.
 
 Yolo. Some work well, some are more experimental. They come with **no guarantee of support**.
 
@@ -12,13 +12,13 @@ All code is licensed under [WTFPL](LICENSE).
 
 ## Install
 
-Install pie as a pi package from git:
+Install pie as a `pi` package from git:
 
 ```bash
 pi install https://github.com/kumar303/pie
 ```
 
-This clones the repo and loads the config extension. Then use `/pie-kumar303-config` to selectively install the other extensions and skills.
+This clones the repo and loads the config extension. Type `/pie-kumar303-config` to selectively install the other extensions and skills.
 
 Run `pi update` to pull the latest changes.
 

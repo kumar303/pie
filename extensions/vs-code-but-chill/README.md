@@ -201,3 +201,7 @@ if you want automatic memory reclamation across both language servers.
 ## License
 
 [WTFPL](../../LICENSE)
+
+## Installation
+
+This is a `pi` extension. Run [`/pie-kumar303-config`](../../README.md#install) to install it.

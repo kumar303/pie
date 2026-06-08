@@ -37,3 +37,7 @@ It switches projects by invoking `$BRAIN_EDITOR` on the directory when set, othe
 ──────────────────────────────────────────────────────────────────────────────────────────────────────
  ↑↓ navigate • tab logs • / search • esc quit
 ```
+
+## Installation
+
+This is a `pi` extension. Run [`/pie-kumar303-config`](../../README.md#install) to install it.
