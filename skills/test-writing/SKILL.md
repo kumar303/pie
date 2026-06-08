@@ -1,6 +1,6 @@
 ---
 name: test-writing
-description: Guidelines for writing high quality automated tests. Use this skill whenever you write a test.
+description: Guidelines for writing high quality automated tests. Use this skill whenever you write a test. Consult this if the user asks to use TDD (test driven development).
 ---
 
 ## General guidelines
