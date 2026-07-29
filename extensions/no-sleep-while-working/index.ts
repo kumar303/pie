@@ -2,11 +2,13 @@
  * No Sleep While Working Extension
  *
  * Prevents the computer from going to sleep while pi is actively working on a
- * task. Spawns `caffeinate -i -d` when the agent starts and kills it when the
- * agent finishes (or the session shuts down).
+ * task. Spawns `caffeinate -i -d -w <pi pid>` when the agent starts and kills it
+ * when the agent finishes (or the session shuts down).
  *
  * -i  prevents idle sleep
  * -d  prevents display sleep (keeps USB/network connections alive)
+ * -w  ties the assertion to the current pi process, so sleep prevention is
+ *     aborted if pi crashes without cleaning up
  *
  * Requires: macOS (caffeinate is a built-in macOS utility).
  */
@@ -41,7 +43,8 @@ export default function (pi: ExtensionAPI) {
     try {
       // -i prevents idle sleep, -d prevents display sleep
       // Without -d, USB wired network connections can drop
-      proc = spawn("caffeinate", ["-i", "-d"], {
+      // -w waits on the current pi process so caffeinate exits if pi crashes
+      proc = spawn("caffeinate", ["-i", "-d", "-w", String(process.pid)], {
         stdio: "ignore",
         detached: false,
         signal: ac.signal,
