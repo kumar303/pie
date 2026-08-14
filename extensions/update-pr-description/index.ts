@@ -318,9 +318,32 @@ export function createExtension(
       }
 
       // Discover the PR for the current branch via gh.
+      //
+      // Pass the branch name explicitly. A bare `gh pr view` resolves the
+      // branch's configured remote (`branch.<name>.remote`), so in repos where
+      // `origin` is not a GitHub host (e.g. the World monorepo on gitstream) it
+      // fails with `could not resolve remote "origin": no matching remote found`.
+      const branchResult = await deps.exec(
+        "git",
+        ["branch", "--show-current"],
+        { cwd: ctx.cwd },
+      );
+      const branch = branchResult.stdout.trim();
+      if (branchResult.exitCode !== 0 || !branch) {
+        const detail =
+          branchResult.stderr.trim() ||
+          (branchResult.exitCode !== 0
+            ? `git exited with code ${branchResult.exitCode}`
+            : "HEAD is detached");
+        ctx.ui.notify(
+          `Failed to determine the current branch: ${detail}. Check out the PR's branch and try again.`,
+          "error",
+        );
+        return;
+      }
       const ghResult = await deps.exec(
         "gh",
-        ["pr", "view", "--json", "body,url"],
+        ["pr", "view", branch, "--json", "body,url"],
         { cwd: ctx.cwd },
       );
       if (ghResult.exitCode !== 0) {

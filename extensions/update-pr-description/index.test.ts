@@ -154,6 +154,10 @@ function makeMockDeps(): UpdatePrDeps & {
             exitCode: res.exitCode ?? 0,
           };
       }
+      // Default: pretend we're on a branch, so tests that don't care about
+      // branch discovery don't have to stub it.
+      if (cmd === "git" && args[0] === "branch")
+        return { stdout: "default-branch\n", stderr: "", exitCode: 0 };
       return { stdout: "", stderr: "", exitCode: 0 };
     },
     async mkdtemp(prefix: string): Promise<string> {
@@ -274,6 +278,75 @@ describe("command handler", () => {
       ghCall!.args.some((a) => a.startsWith("http")),
       `gh args should not contain a URL, got: ${JSON.stringify(ghCall!.args)}`,
     ).toBe(false);
+  });
+
+  it("passes the current branch name to gh pr view", async () => {
+    deps.execResponders.push((cmd, args) => {
+      if (cmd === "git" && args[0] === "branch") {
+        return { stdout: "my-feature-branch\n" };
+      }
+      return undefined;
+    });
+    respondBody("body");
+    await runCmd();
+
+    const ghCall = deps.execCalls.find(
+      (c) => c.cmd === "gh" && c.args[0] === "pr" && c.args[1] === "view",
+    );
+    expect(ghCall, "expected a `gh pr view` exec call").toBeDefined();
+    // Explicit branch name: a bare `gh pr view` resolves the branch's
+    // configured remote, which fails when `origin` is not a GitHub host.
+    expect(ghCall!.args).toEqual([
+      "pr",
+      "view",
+      "my-feature-branch",
+      "--json",
+      "body,url",
+    ]);
+  });
+
+  it("errors without calling gh when HEAD is detached", async () => {
+    deps.execResponders.push((cmd, args) => {
+      if (cmd === "git" && args[0] === "branch") {
+        return { stdout: "\n" };
+      }
+      return undefined;
+    });
+    respondBody("body");
+    await runCmd();
+
+    expect(
+      deps.execCalls.some((c) => c.cmd === "gh"),
+      "gh should not be called without a branch",
+    ).toBe(false);
+    expect(pi.sent).toHaveLength(0);
+    expect(
+      ui.notifications.some((n) => n.level === "error"),
+      `expected an error notification, got: ${JSON.stringify(ui.notifications)}`,
+    ).toBe(true);
+  });
+
+  it("errors without calling gh when the branch lookup fails", async () => {
+    deps.execResponders.push((cmd, args) => {
+      if (cmd === "git" && args[0] === "branch") {
+        return { stdout: "", stderr: "not a git repository", exitCode: 128 };
+      }
+      return undefined;
+    });
+    respondBody("body");
+    await runCmd();
+
+    expect(
+      deps.execCalls.some((c) => c.cmd === "gh"),
+      "gh should not be called when the branch lookup fails",
+    ).toBe(false);
+    expect(pi.sent).toHaveLength(0);
+    expect(
+      ui.notifications.some(
+        (n) => n.level === "error" && n.msg.includes("not a git repository"),
+      ),
+      `expected an error notification with git stderr, got: ${JSON.stringify(ui.notifications)}`,
+    ).toBe(true);
   });
 
   it("ignores any stray arguments", async () => {
