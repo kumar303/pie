@@ -81,7 +81,8 @@ for (const group of [...groups.values()].sort(
   (a, b) =>
     a.model.localeCompare(b.model) || a.scenario.localeCompare(b.scenario),
 )) {
-  const rows = group.rows.filter((row) => !row.error && metadataOf(row).agents);
+  // promptfoo also sets `error` on threshold failures; only rows without scenario data are harness errors.
+  const rows = group.rows.filter((row) => metadataOf(row).agents);
   const errored = group.rows.length - rows.length;
   const md = rows.map(metadataOf);
   lines.push(

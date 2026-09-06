@@ -46,7 +46,7 @@ const AGENTS = {
 const DEFAULT_CONFIG = {
   modelSlot: "A", // "A" | "B" | "judge"; or set `model` directly
   thinking: undefined, // defaults to PI_EVAL_THINKING / medium
-  maxTurns: 4, // per agent, counted from the task prompt
+  maxTurns: 6, // per agent, counted from the task prompt
   bootTimeoutMs: 90_000,
   joinTimeoutMs: 120_000, // for each /join to settle
   joinQuietTimeoutMs: 10_000, // how long a "human" waits for both agents to go quiet before typing the task
@@ -205,12 +205,21 @@ async function runScenario({ prompt, model, thinking, config, logger }) {
         event.type === "extension_ui_request" &&
         event.method === "notify" &&
         event.notifyType === "error";
+      // The join notice may or may not start an agent run. Treat the notice
+      // landing in the session as "joined"; whether the agent then acts on it
+      // is measured by the quiet wait below.
+      const isJoinNotice = (event) =>
+        event.type === "message_end" &&
+        event.message?.customType === "join-instructions";
       const outcome = await Promise.race([
-        session.waitForSettled({
-          timeoutMs: config.joinTimeoutMs,
-          fromSeq: from,
-          label: "/join to settle",
-        }),
+        session.waitFor(
+          (event) => isJoinNotice(event) || event.type === "agent_settled",
+          {
+            timeoutMs: config.joinTimeoutMs,
+            fromSeq: from,
+            label: "/join to settle",
+          },
+        ),
         session
           .waitFor(isErrorNotify, {
             timeoutMs: config.joinTimeoutMs,

@@ -181,9 +181,10 @@ export function createExtension(pi: JoinPi): void {
     const heading = label
       ? `[join message from peer "${peer.name}" in channel "${label}"]`
       : `[join message from peer "${peer.name}"]`;
+    const guidance = `If this is a request, do the work, then reply to "${peer.name}" with exactly one join_send containing the result. If you need more information to do it, ask "${peer.name}" with exactly one join_send. If this is a result, an answer or an acknowledgement, do not reply.`;
     const message = {
       customType: "join-message",
-      content: `${heading}\n\n${stripTerminalSequences(text)}`,
+      content: `${heading}\n\n${stripTerminalSequences(text)}\n\n[${guidance}]`,
       display: true,
     };
     try {
@@ -510,16 +511,20 @@ export function createExtension(pi: JoinPi): void {
   pi.registerTool({
     name: "join_send",
     label: "Send Join Message",
-    description: "Send a message to exactly one known join peer by name.",
+    description:
+      "Send a request, a finished result, or a blocking question to exactly one known join peer by name. Do not use it for acknowledgements, thanks, greetings or progress updates.",
     parameters: Type.Object({
       to: Type.String({ description: "The exact peer name" }),
-      text: Type.String({ description: "The message to send" }),
+      text: Type.String({
+        description:
+          "The message to send: a complete request, the complete result of a request, or a question you need answered to continue",
+      }),
     }),
     async execute(_toolCallId, params) {
       if (!active) return toolText("Error: this session is not joined.");
       const to = sanitizeName(params.to);
       const peer = [...active.peers.values()].find((item) => item.name === to);
-      if (!peer) return toolText(`Error: unknown peer "${to}".`);
+      if (!peer) return toolText(unknownPeerError(to, active));
       const sender = active.member;
       try {
         await postToPeer(
@@ -572,11 +577,43 @@ function sendJoinInstructions(pi: JoinPi, active: ActiveChannel): void {
   pi.sendMessage(
     {
       customType: "join-instructions",
-      content: `[Join channel connected]\n${joined}\n\nAvailable tools:\n- join_send({ to, text }): send to exactly one peer by name. Both fields are required.\n- join_list_peers(): list the peers currently known to this session.\n\nRules:\n- After completing a task, always reply to the message sender.\n- Send every peer reply with join_send.`,
+      content: joinProtocol(joined),
       display: true,
     },
-    { triggerTurn: true },
+    // Joining is not a task: the agent should not start working or greeting peers.
+    { triggerTurn: false },
   );
+}
+
+function joinProtocol(joined: string): string {
+  return [
+    "[Join channel connected]",
+    joined,
+    "This notice is not a task. Do nothing with it until a human or a peer asks you for something.",
+    "",
+    'Peers are other agents, named after their working directory plus a number (for example "website1").',
+    "",
+    "Available tools:",
+    "- join_send({ to, text }): send to exactly one peer by name. Both fields are required.",
+    "- join_list_peers(): list the peers currently known to this session.",
+    "",
+    "Protocol:",
+    "- When a peer asks you for something, do the work first. When it is finished, send the sender exactly one join_send containing the complete result. The sender only learns the result from that message.",
+    "- If you cannot do the work without more information, send the sender exactly one join_send with your question, then stop and wait.",
+    "- Do not acknowledge a message when it arrives. Do not send progress updates, thanks, confirmations, greetings or emoji. A message that needs no action from the recipient must not be sent.",
+    "- When a peer sends you a result you asked for, use it and do not reply.",
+    "- Never send a message to a peer unless a human or a peer asked you to do something that needs it.",
+  ].join("\n");
+}
+
+function unknownPeerError(to: string, active: ActiveChannel): string {
+  const known = [...active.peers.values()]
+    .map((peer) => peer.name)
+    .sort((a, b) => a.localeCompare(b));
+  const hint = known.length
+    ? `Known peers: ${known.join(", ")}. Use one of those exact names.`
+    : "No peers are connected yet.";
+  return `Error: unknown peer "${to}". ${hint}`;
 }
 
 function joinUsage(): string {

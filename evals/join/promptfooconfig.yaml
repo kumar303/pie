@@ -22,14 +22,14 @@ providers:
     label: "{{ env.PI_EVAL_MODEL_A | default('openai/gpt-5.6-sol') }}"
     config:
       modelSlot: A
-      maxTurns: 4 # request and reply land on turn 1; more turns only measure ping-pong
+      maxTurns: 6 # request and reply land on turn 1; recovery from a wrong name needs ~5 turns; more only measures ping-pong
       quietMs: 4000
       joinQuietTimeoutMs: 10000
   - id: file://providers/join-pair.mjs
     label: "{{ env.PI_EVAL_MODEL_B | default('anthropic/claude-opus-5') }}"
     config:
       modelSlot: B
-      maxTurns: 4
+      maxTurns: 6
       quietMs: 4000
       joinQuietTimeoutMs: 10000
 

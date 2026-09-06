@@ -1,5 +1,27 @@
 # Findings: peer-name discoverability (2026-09-06)
 
+## Update: chatter fixed in the extension (same day)
+
+Three changes to `extensions/join/index.ts`, each driven by a run of this suite (`thinking: off`, `maxTurns: 6`, judge `claude-sonnet-4-6`, 18 runs each):
+
+| run         | what changed                                                                                                                                                        | pass      | score    | judge    | extra msgs/run | join-phase msgs | tool errors | turn-cap hits | tokens/run | s/run |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- | -------- | -------- | -------------- | --------------- | ----------- | ------------- | ---------- | ----- |
+| baseline    | original notice ("always reply to the message sender"), turn triggered on join                                                                                      | 17/18     | 0.79     | 0.41     | 6.7            | 3.8             | 0.1         | 17            | 56k        | 47    |
+| protocol v1 | join notice is a protocol, not a task (`triggerTurn: false`); every incoming message ends with reply/no-reply guidance; `join_send` description says what it is for | 15/18     | 0.79     | 0.70     | **0.0**        | **0.0**         | 0.4         | 7             | 15k        | 18    |
+| protocol v2 | v1 + `Error: unknown peer "x". Known peers: card-tricks1. Use one of those exact names.`                                                                            | **18/18** | **0.93** | **0.86** | 0.0            | 0.0             | 0.4         | **0**         | 18k        | 22    |
+
+- Chatter went to zero in every one of the 36 post-change runs: no greetings after `/join`, no acknowledgements, no thank-you loops. Every request got exactly one reply containing the result, and `website1` relayed it to the human in 18/18 runs.
+- v1's regressions were a side effect of removing the join turn: agents no longer ran `join_list_peers` on join, so with a misspelled or descriptive name they guessed (`cart-tricks1`, `card-tricks`), got a bare error, and used up the (then 4) turn cap recovering. Listing the known peers in the error fixed recovery to one extra turn; both models then sent to the right name without calling `join_list_peers`.
+- The remaining 0.4 tool errors/run are that first guess in the misspelled/descriptive scenarios. That is correct behaviour (the human gave a wrong name); the rubric does not penalise it, and it costs one turn.
+- Remaining judge deductions are local status lines to the human ("Asked card-tricks1; awaiting reply"). They are not peer messages and cost nothing.
+- No new tools were needed. Per-message guidance appended to each `join-message` did most of the work; it sits in the most recent context, where the model is deciding whether to reply.
+
+Raw data: `results/run-baseline-fast.json`, `results/run-protocol-v1.json`, `results/run-protocol-v2.json` (= `latest.json`).
+
+---
+
+## Original analysis (before the fix)
+
 Run: 3 scenarios × 2 models × 3 repeats = 18 runs, `thinking: medium`, judge `anthropic/claude-opus-5`. Raw data: `results/latest.json`; tables: `results/report.md`.
 
 ## Answer to the question

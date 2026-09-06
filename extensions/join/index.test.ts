@@ -292,6 +292,62 @@ describe("join extension", () => {
     expect(harness.messages).toHaveLength(messages);
   });
 
+  it("delivers the join protocol without starting a turn", async () => {
+    const harness = makeHarness();
+    await command(harness, "team");
+
+    const instructions = harness.messages.find(
+      (entry) => entry.message.customType === "join-instructions",
+    );
+    expect(instructions).toBeDefined();
+    expect(instructions?.options).toMatchObject({ triggerTurn: false });
+    const content = String(instructions?.message.content);
+    expect(content).toContain("not a task");
+    expect(content).toContain("exactly one join_send");
+    expect(content).toContain("Do not acknowledge");
+    expect(content).not.toContain("always reply");
+  });
+
+  it("describes the tools in terms of requests, results and questions", () => {
+    const harness = makeHarness();
+    const send = harness.tools.get("join_send");
+    expect(send?.description).toContain("result");
+    expect(send?.description).toContain("Do not use it for acknowledgements");
+  });
+
+  it("tells the receiver when a reply is and is not expected", async () => {
+    const { first, second } = await makeJoinedPair({
+      channel: "team",
+      cwd: "/tmp/pie",
+    });
+
+    await tool(first, "join_send", { to: "pie2", text: "finish task 4" });
+
+    const content = String(second.messages.at(-1)?.message.content);
+    expect(content).toContain(
+      '[join message from peer "pie1" in channel "team"]',
+    );
+    expect(content).toContain("finish task 4");
+    expect(content).toContain('reply to "pie1" with exactly one join_send');
+    expect(content).toContain("do not reply");
+  });
+
+  it("lists the known peers when a message is addressed to an unknown name", async () => {
+    const { first } = await makeJoinedPair({
+      channel: "team",
+      cwd: "/tmp/pie",
+    });
+
+    const result = await tool(first, "join_send", {
+      to: "pie3",
+      text: "hello",
+    });
+
+    expect(resultText(result)).toBe(
+      'Error: unknown peer "pie3". Known peers: pie2. Use one of those exact names.',
+    );
+  });
+
   it("connects two sessions and sends an attributed direct message", async () => {
     const { first, second } = await makeJoinedPair({
       channel: "team",
