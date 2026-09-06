@@ -10,8 +10,8 @@ It does not test anything else about the extension.
 
 1. Two temp directories are created from `fixtures/`: `website/` (a magician's résumé page) and `card-tricks/` (a JSON list of card tricks). Both live under one sandbox root so teardown is one delete.
 2. One locked-down `pi --mode rpc` starts in each directory with **only** `join_send` and `join_list_peers` (no read/write/bash). Each agent's system prompt is seeded with the contents of its own directory. `JOIN_PI_HOME` points inside the sandbox so real join channels are never touched.
-3. `/join` runs in `card-tricks` first, then `website`. The runner waits up to 30 s for both agents to go quiet (they sometimes start talking to each other unprompted).
-4. The prompt is sent to `website1`. Everything both agents do is recorded until both are quiet for 6 s, an agent uses 8 turns, or 4 minutes pass.
+3. `/join` runs in `card-tricks` first, then `website`. The runner waits up to 10 s for both agents to go quiet (they sometimes start talking to each other unprompted).
+4. The prompt is sent to `website1`. Everything both agents do is recorded until both are quiet for 4 s, an agent uses 4 turns, or 4 minutes pass.
 5. Processes are killed and the sandbox is removed.
 
 Three prompt variants (`tests` in `promptfooconfig.yaml`):

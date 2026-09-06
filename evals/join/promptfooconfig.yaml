@@ -22,12 +22,16 @@ providers:
     label: "{{ env.PI_EVAL_MODEL_A | default('openai/gpt-5.6-sol') }}"
     config:
       modelSlot: A
-      maxTurns: 8
+      maxTurns: 4 # request and reply land on turn 1; more turns only measure ping-pong
+      quietMs: 4000
+      joinQuietTimeoutMs: 10000
   - id: file://providers/join-pair.mjs
     label: "{{ env.PI_EVAL_MODEL_B | default('anthropic/claude-opus-5') }}"
     config:
       modelSlot: B
-      maxTurns: 8
+      maxTurns: 4
+      quietMs: 4000
+      joinQuietTimeoutMs: 10000
 
 defaultTest:
   # Weighted average of all assertions must reach this for the test to pass.
@@ -101,7 +105,7 @@ tests:
 
 evaluateOptions:
   # Each test spawns two pi processes; keep this low.
-  maxConcurrency: 3
+  maxConcurrency: 6 # each run is two mostly-idle pi processes; API latency is the bottleneck
   # Agent behaviour is stochastic; repeat to see the distribution. Override with --repeat.
   repeat: 3
   cache: false

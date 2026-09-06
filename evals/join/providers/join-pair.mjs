@@ -46,13 +46,13 @@ const AGENTS = {
 const DEFAULT_CONFIG = {
   modelSlot: "A", // "A" | "B" | "judge"; or set `model` directly
   thinking: undefined, // defaults to PI_EVAL_THINKING / medium
-  maxTurns: 8, // per agent, counted from the task prompt
+  maxTurns: 4, // per agent, counted from the task prompt
   bootTimeoutMs: 90_000,
   joinTimeoutMs: 120_000, // for each /join to settle
-  joinQuietTimeoutMs: 30_000, // how long a "human" waits for both agents to go quiet before typing the task
+  joinQuietTimeoutMs: 10_000, // how long a "human" waits for both agents to go quiet before typing the task
   taskTimeoutMs: 240_000,
   promptStartTimeoutMs: 60_000, // website1 must begin a run within this long after the task prompt
-  quietMs: 6_000, // both agents idle for this long => scenario over
+  quietMs: 4_000, // both agents idle for this long => scenario over
 };
 
 const validatedModels = new Map();

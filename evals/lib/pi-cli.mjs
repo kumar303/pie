@@ -16,8 +16,8 @@ export const REPO_ROOT = resolve(
 export const DEFAULTS = {
   modelA: "openai/gpt-5.6-sol",
   modelB: "anthropic/claude-opus-5",
-  judgeModel: "anthropic/claude-opus-5",
-  thinking: "medium",
+  judgeModel: "anthropic/claude-sonnet-4-6",
+  thinking: "off",
 };
 
 export function piBin() {
