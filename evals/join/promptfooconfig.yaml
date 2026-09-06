@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# join eval: is a generic peer name like "card-tricks1" enough for agents to
+# work out how to use the join messaging tools?
+#
+# Run from evals/:  pnpm run eval:join        (see evals/README.md)
+description: "join: peer-name discoverability (website1 asks card-tricks1 for card tricks)"
+
+tags:
+  suite: join
+  feature: peer-naming
+
+prompts:
+  - id: ask-peer
+    label: ask-peer
+    raw: "Ask {{peer_name}} to give you 5 random card tricks"
+
+# Each provider runs the full two-agent scenario with one pi model.
+# Models come from PI_EVAL_MODEL_A / PI_EVAL_MODEL_B (see evals/README.md).
+providers:
+  - id: file://providers/join-pair.mjs
+    label: "{{ env.PI_EVAL_MODEL_A | default('openai/gpt-5.6-sol') }}"
+    config:
+      modelSlot: A
+      maxTurns: 8
+  - id: file://providers/join-pair.mjs
+    label: "{{ env.PI_EVAL_MODEL_B | default('anthropic/claude-opus-5') }}"
+    config:
+      modelSlot: B
+      maxTurns: 8
+
+defaultTest:
+  # Weighted average of all assertions must reach this for the test to pass.
+  threshold: 0.7
+  options:
+    # Judge runs through pi too, so it works wherever pi works.
+    provider:
+      id: file://providers/pi-judge.mjs
+      label: pi-judge
+    rubricPrompt: file://prompts/judge-rubric.txt
+  assert:
+    # --- Tier 1: deterministic checks on the recorded tool calls -------------
+    - type: javascript
+      value: file://assertions/join-checks.mjs:websiteSentRequest
+      metric: request_sent
+      weight: 3
+    - type: javascript
+      value: file://assertions/join-checks.mjs:cardTricksReplied
+      metric: reply_sent
+      weight: 3
+    - type: javascript
+      value: file://assertions/join-checks.mjs:toolUseCorrect
+      metric: tool_correctness
+      weight: 2
+    - type: javascript
+      value: file://assertions/join-checks.mjs:turnEfficiency
+      metric: turn_efficiency
+      weight: 2
+      config:
+        threshold: 0.5
+    - type: javascript
+      value: file://assertions/join-checks.mjs:noExtraChatter
+      metric: chatter
+      weight: 1
+    - type: javascript
+      value: file://assertions/join-checks.mjs:completedCleanly
+      metric: completion
+      weight: 1
+    # --- Tier 2: LLM judge reads the whole transcript ------------------------
+    - type: llm-rubric
+      value: "{{ extra_rubric }}"
+      metric: judge
+      weight: 3
+      threshold: 0.7
+
+tests:
+  - description: "exact peer name: card-tricks1"
+    vars:
+      peer_name: card-tricks1
+      extra_rubric: "None."
+    metadata:
+      scenario: exact-name
+  - description: "misspelled peer name: cart-tricks1 (agent must recover, e.g. via join_list_peers)"
+    vars:
+      peer_name: cart-tricks1
+      extra_rubric: >-
+        The human misspelled the peer as "cart-tricks1". Do not penalise a single
+        failed join_send to "cart-tricks1" if the agent then discovered the real
+        name (card-tricks1) and continued. Do penalise giving up or asking the human.
+    metadata:
+      scenario: misspelled-name
+  - description: "descriptive reference: 'the card-tricks agent' (no exact peer name given)"
+    vars:
+      peer_name: the card-tricks agent
+      extra_rubric: >-
+        The human did not give the exact peer name; they said "the card-tricks agent".
+        website1 must work out that the peer is called card-tricks1 (join_list_peers is
+        the obvious way). Do not penalise one join_list_peers call for this.
+    metadata:
+      scenario: descriptive-name
+
+evaluateOptions:
+  # Each test spawns two pi processes; keep this low.
+  maxConcurrency: 3
+  # Agent behaviour is stochastic; repeat to see the distribution. Override with --repeat.
+  repeat: 3
+  cache: false
+  # Per test-case wall clock (boot + join + task + judge).
+  timeoutMs: 900000
+
+# Relative to the directory promptfoo runs from (evals/), not this file.
+outputPath: join/results/latest.json
+sharing: false
+writeLatestResults: true

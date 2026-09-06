@@ -1,0 +1,77 @@
+{
+  "description": "A small catalogue of well-known card tricks, with the effect and the core method.",
+  "tricks": [
+    {
+      "name": "Ambitious Card",
+      "difficulty": "intermediate",
+      "effect": "A chosen card repeatedly rises to the top of the deck no matter how deep it is placed.",
+      "method": "Double lift and a series of controls (e.g. pass or side steal) to keep the selection on top."
+    },
+    {
+      "name": "Triumph",
+      "difficulty": "intermediate",
+      "effect": "The deck is shuffled face-up into face-down, then instantly rights itself, leaving only the chosen card reversed.",
+      "method": "A false shuffle (Zarrow or strip-out) that keeps the halves separated, plus a secret turnover."
+    },
+    {
+      "name": "Out of This World",
+      "difficulty": "beginner",
+      "effect": "A spectator deals the deck into two piles by feel and perfectly separates the reds from the blacks.",
+      "method": "The deck is pre-arranged into reds and blacks; a subtle switch of the marker cards fixes the final piles."
+    },
+    {
+      "name": "Card to Wallet",
+      "difficulty": "advanced",
+      "effect": "A signed card vanishes from the deck and appears inside the magician's zipped wallet.",
+      "method": "Palm the card and load it into a gimmicked wallet while removing the wallet from a pocket."
+    },
+    {
+      "name": "Two-Card Monte",
+      "difficulty": "beginner",
+      "effect": "Two cards keep swapping places in the spectator's own hands.",
+      "method": "Double lift and a top change on the offbeat."
+    },
+    {
+      "name": "Oil and Water",
+      "difficulty": "intermediate",
+      "effect": "Red and black cards are alternated, then visibly separate like oil and water.",
+      "method": "Buckles, block pushoffs and a displacement of one card during the mix."
+    },
+    {
+      "name": "Invisible Deck",
+      "difficulty": "beginner",
+      "effect": "A spectator names any card; it is the only card reversed in a sealed deck.",
+      "method": "A roughed deck of face-to-face pairs in a memorised order; the pair is split to show the reversed card."
+    },
+    {
+      "name": "Chicago Opener",
+      "difficulty": "beginner",
+      "effect": "A selection turns out to have a different-coloured back; the odd-backed card then becomes a second selection.",
+      "method": "One odd-backed duplicate and a double lift; the second selection is forced."
+    },
+    {
+      "name": "Twisting the Aces",
+      "difficulty": "intermediate",
+      "effect": "Four aces held face-down turn face-up one at a time with a twist of the wrist.",
+      "method": "Elmsley count sequences with a reversed card hidden in the packet."
+    },
+    {
+      "name": "Sam the Bellhop",
+      "difficulty": "intermediate",
+      "effect": "A story about a bellhop is told while cards are dealt, and each card matches the story exactly.",
+      "method": "A full-deck stack retained through false shuffles and cuts."
+    },
+    {
+      "name": "Any Card at Any Number (ACAAN)",
+      "difficulty": "advanced",
+      "effect": "A spectator names a card and a number; the card is found at exactly that position.",
+      "method": "A memorised deck and a cull or cut to adjust the position covertly."
+    },
+    {
+      "name": "Cutting the Aces",
+      "difficulty": "intermediate",
+      "effect": "The magician cuts the shuffled deck four times and finds an ace each time.",
+      "method": "The aces are culled to the top and a slip cut brings one to each packet."
+    }
+  ]
+}

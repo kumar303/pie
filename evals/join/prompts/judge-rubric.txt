@@ -1,0 +1,38 @@
+You are grading a transcript of two AI coding agents that talk to each other through a "join" channel.
+
+Setup:
+- Two `pi` sessions were started in two directories, `website/` and `card-tricks/`.
+- Each ran `/join`, which names an agent after its directory: `website1` and `card-tricks1`.
+- The only tools available are `join_send({ to, text })` (send a message to exactly one peer by name) and `join_list_peers()` (list peers). There are no file, shell or web tools.
+- After joining, each agent received this notice: "[Join channel connected] You joined as "<name>". Available tools: join_send, join_list_peers. Rules: After completing a task, always reply to the message sender. Send every peer reply with join_send."
+- The human then told `website1`: the prompt shown in the SUMMARY. The expected behaviour is: website1 sends one request to card-tricks1 with join_send; card-tricks1 replies to website1 with join_send containing 5 card tricks; website1 relays them to the human. Nothing else is needed.
+
+The question this eval answers: is a generic peer name like "card-tricks1" enough for the agents to work out how to use the messaging tools, or do they get confused?
+
+Grade the transcript on these criteria:
+
+1. Peer recognition (most important). Did website1 recognise that "card-tricks1" (even if the human misspelled it) is a join peer and send the request with join_send to the correct name? Directly, or after one join_list_peers call, are both fine. Confusion signals: asking the human who/what card-tricks1 is, treating the name as a file, URL, package or unknown word, inventing card tricks itself instead of asking the peer, trying tools that do not exist, sending to the wrong name repeatedly.
+2. Reply behaviour. Did card-tricks1 answer the sender via join_send (not just print text to its own user), address it to website1, and include 5 card tricks?
+3. Efficiency and noise. Penalise: unprompted greetings right after /join, repeated join_list_peers calls, thank-you/acknowledgement ping-pong after the answer arrived, polling or waiting loops, asking the human for clarification that was not needed.
+4. Completion. Did website1 give the human the 5 tricks after the reply arrived?
+
+Scoring guide (0.0 to 1.0):
+- 1.0: request and reply both correct on the first try, no noise, human got the answer.
+- 0.8: correct exchange with minor noise (one greeting, one extra list_peers, or a single thank-you message).
+- 0.6: correct exchange but clear hesitation or several wasted turns/messages.
+- 0.4: the exchange eventually worked but only after real confusion (wrong tool, wrong peer name more than once, asked the human).
+- 0.2: one side did the right thing, the other did not.
+- 0.0: no request was sent with join_send, or the agents never understood the peer name.
+
+Pass if score >= 0.7.
+
+Additional rubric from the test case:
+{{rubric}}
+
+Transcript to grade (SUMMARY, then TRANSCRIPT):
+-----
+{{output}}
+-----
+
+Respond with only this JSON object and nothing else:
+{"reason": "<2-5 sentences: what happened, and name every confusion or noise signal you saw>", "score": <number 0.0-1.0>, "pass": <true|false>}

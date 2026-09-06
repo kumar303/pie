@@ -1,0 +1,25 @@
+{
+  "name": "pie-evals",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "validate-models": "node join/scripts/validate-models.mjs",
+    "promptfoo": "node bin/promptfoo.mjs",
+    "eval:join": "node join/scripts/validate-models.mjs && node bin/promptfoo.mjs eval -c join/promptfooconfig.yaml --no-cache",
+    "eval:join:smoke": "node join/scripts/validate-models.mjs && node bin/promptfoo.mjs eval -c join/promptfooconfig.yaml --no-cache --repeat 1 --filter-first-n 1",
+    "debug:join": "node join/scripts/debug-run.mjs",
+    "report:join": "node join/scripts/report.mjs",
+    "view": "node bin/promptfoo.mjs view -y"
+  },
+  "devDependencies": {
+    "promptfoo": "^0.120.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild",
+      "@swc/core",
+      "sharp"
+    ]
+  }
+}
