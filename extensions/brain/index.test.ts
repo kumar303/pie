@@ -994,14 +994,17 @@ describe("/brain search", () => {
     expect(text).not.toContain("/ _");
   });
 
-  it("ENTER keeps the active filter", async () => {
-    const { ui } = await seedAndOpenUi();
+  it("ENTER opens the filtered project and closes the list", async () => {
+    const { ctx, h, ui } = await seedAndOpenUi();
     ui.fireInput("/");
     for (const c of "alph") ui.fireInput(c);
+
     ui.fireInput(ENTER);
-    const text = ui.renderText();
-    expect(text).toContain("alpha");
-    expect(text).not.toContain("beta [feat/login]");
+
+    expect(h.spawn.calls).toHaveLength(1);
+    expect(h.spawn.calls[0].args).toContain("/home/user/alpha");
+    expect(ctx.ui.hasActiveCustom()).toBe(false);
+    await ui.cmdPromise;
   });
 
   it("BACKSPACE to empty exits search", async () => {
@@ -1036,6 +1039,15 @@ describe("/brain ESC exits", () => {
 });
 
 describe("/brain ENTER opens directory", () => {
+  it("closes the project list after opening the selected directory", async () => {
+    const { ctx, ui } = await seedAndOpenUi();
+
+    ui.fireInput(ENTER);
+
+    expect(ctx.ui.hasActiveCustom()).toBe(false);
+    await ui.cmdPromise;
+  });
+
   it("invokes the editor for the cursor's directory", async () => {
     const { h, ui } = await seedAndOpenUi();
     ui.fireInput(ENTER);
@@ -1326,7 +1338,6 @@ describe("inbound sessions_changed messages", () => {
     const { ui } = await seedAndOpenUi();
     ui.fireInput("/");
     for (const c of "alp") ui.fireInput(c);
-    ui.fireInput(ENTER);
     // Simulate disk change with new entry that wouldn't match the filter
     const now = Date.now();
     writeFileSync(
@@ -1746,12 +1757,14 @@ describe("ENTER from search", () => {
   // (search variant) and "exits instead of opening current session via
   // search".
   it("opens the matched directory when ENTER is pressed inside search", async () => {
-    const { h, ui } = await seedAndOpenUi();
+    const { ctx, h, ui } = await seedAndOpenUi();
     h.spawn.calls.length = 0;
     ui.fireInput("/");
     for (const c of "alph") ui.fireInput(c);
     ui.fireInput(ENTER);
     expect(h.spawn.calls.length).toBe(1);
+    expect(ctx.ui.hasActiveCustom()).toBe(false);
+    await ui.cmdPromise;
   });
 
   it("exits instead of opening when the matched dir is the current session", async () => {

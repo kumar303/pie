@@ -206,6 +206,8 @@ export function createExtension(
               publishMessage({ type: "sessions_changed" });
             }
 
+            component.dispose();
+            done(undefined);
             openDirectory(dir.dir, ctx, spawnSync);
           },
           data,
