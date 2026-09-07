@@ -1,7 +1,7 @@
 /**
  * Brain extension data layer.
  *
- * All file I/O for sessions, logs, and status — no TUI imports.
+ * All file I/O for sessions and status — no TUI imports.
  */
 
 import { execSync } from "node:child_process";
@@ -63,7 +63,6 @@ export function getDataDir(dataDir) {
     process.env.PI_BRAIN_DIR ||
     join(homedir(), ".pi", "agent", "brain");
   mkdirSync(join(dir, "status"), { recursive: true });
-  mkdirSync(join(dir, "logs"), { recursive: true });
   return dir;
 }
 
@@ -75,11 +74,6 @@ function sessionsPath(dataDir) {
 /** @param {string} dataDir @param {string} sessionId @returns {string} */
 function statusPath(dataDir, sessionId) {
   return join(dataDir, "status", `${sessionId}.status`);
-}
-
-/** @param {string} dataDir @param {string} sessionId @returns {string} */
-function logPath(dataDir, sessionId) {
-  return join(dataDir, "logs", `${sessionId}.log`);
 }
 
 // ── Git ─────────────────────────────────────────────────────────────
@@ -267,46 +261,6 @@ export function filterDirs(dirs, query) {
   });
 }
 
-// ── Logs ────────────────────────────────────────────────────────────
-
-const MAX_LOG_LINES = 100;
-
-/** @param {string} sessionId @param {string} toolName @param {string} output @param {string} [dataDir] */
-export function appendLog(sessionId, toolName, output, dataDir) {
-  const dd = dataDir ?? getDataDir();
-  const file = logPath(dd, sessionId);
-
-  const ts = new Date().toISOString();
-  const header = `[${toolName}] ${ts}`;
-  const newContent = header + "\n" + output + "\n";
-
-  let existing = "";
-  try {
-    existing = readFileSync(file, "utf-8");
-  } catch {
-    // file doesn't exist yet
-  }
-
-  const combined = existing + newContent;
-  const lines = combined.split("\n");
-
-  // Truncate to last MAX_LOG_LINES lines
-  const truncated = lines.slice(-MAX_LOG_LINES);
-  writeFileSync(file, truncated.join("\n"));
-}
-
-/** @param {string} sessionId @param {string} [dataDir] @returns {string[]} */
-export function readLog(sessionId, dataDir) {
-  const dd = dataDir ?? getDataDir();
-  const file = logPath(dd, sessionId);
-  try {
-    const raw = readFileSync(file, "utf-8");
-    return raw.split("\n");
-  } catch {
-    return [];
-  }
-}
-
 // ── Pruning ─────────────────────────────────────────────────────────
 
 /** @param {number} [maxAgeDays] @param {string} [dataDir] */
@@ -340,12 +294,9 @@ export function pruneOldSessions(maxAgeDays, dataDir) {
   const keptSessionIds = new Set(kept.map((e) => e.sessionId));
   for (const sid of removedSessionIds) {
     if (keptSessionIds.has(sid)) continue;
-    // Remove status and log files
+    // Remove status files
     try {
       unlinkSync(statusPath(dd, sid));
-    } catch {}
-    try {
-      unlinkSync(logPath(dd, sid));
     } catch {}
   }
 }

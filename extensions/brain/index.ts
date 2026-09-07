@@ -1,11 +1,10 @@
 /**
  * Brain Extension
  *
- * Invoke with `/brain`. Shows a three-panel TUI for browsing recent project
- * directories and their tool output logs.
+ * Invoke with `/brain`. Shows a TUI for browsing recent project directories.
  *
- * Tracks session activity (working/idle) and logs tool output for each
- * pi session directory. Uses a pub/sub service for instant status updates.
+ * Tracks session activity (working/idle) and uses a pub/sub service for
+ * instant status updates.
  */
 
 import { spawnSync as realSpawnSync } from "node:child_process";
@@ -19,8 +18,6 @@ import {
   recordFocus,
   writeStatus,
   readSessions,
-  readLog,
-  appendLog,
   pruneOldSessions,
   getGitBranch,
   type DirEntry,
@@ -71,34 +68,12 @@ export function createExtension(
 
   let sessionId: string | null = null;
   let sessionDir: string | null = null;
-  let logBuffer: { toolName: string; output: string }[] = [];
-  let flushTimer: ReturnType<typeof setInterval> | null = null;
 
   // Pub/sub client — stored as a promise so publishes can await it.
   // Resolves to the Client on success, or null if the service failed
   // to start (with the error stored in pubsubError).
   let connectingClient: Promise<Client | null> | null = null;
   let pubsubError: string | null = null;
-
-  function flushLogBuffer(): void {
-    if (!sessionId || logBuffer.length === 0) return;
-    for (const entry of logBuffer) {
-      appendLog(sessionId, entry.toolName, entry.output);
-    }
-    logBuffer = [];
-  }
-
-  function startFlushTimer(): void {
-    if (flushTimer) return;
-    flushTimer = setInterval(flushLogBuffer, 2000);
-  }
-
-  function stopFlushTimer(): void {
-    if (flushTimer) {
-      clearInterval(flushTimer);
-      flushTimer = null;
-    }
-  }
 
   /** Publish a message via the pub/sub service (non-blocking). */
   async function publishMessage(msg: PubSubMessage): Promise<void> {
@@ -123,7 +98,6 @@ export function createExtension(
 
     if (sessionId && sessionDir) {
       registerSession(sessionId, sessionDir);
-      startFlushTimer();
 
       // Connect to pub/sub service (non-blocking).
       // On failure, store the error so the brain UI can display it.
@@ -179,23 +153,7 @@ export function createExtension(
     }
   });
 
-  pi.on("tool_result", async (event, _ctx) => {
-    if (!sessionId) return;
-
-    // Extract text content from tool result
-    const textParts = event.content
-      .filter((c: any) => c.type === "text")
-      .map((c: any) => c.text);
-    const output = textParts.join("\n");
-
-    if (output) {
-      logBuffer.push({ toolName: event.toolName, output });
-    }
-  });
-
   pi.on("session_shutdown", async (_event, _ctx) => {
-    flushLogBuffer();
-    stopFlushTimer();
     if (sessionId && sessionDir) {
       writeStatus(sessionId, "idle");
       const client = await getClient();
@@ -217,15 +175,12 @@ export function createExtension(
   // ── /brain command ──────────────────────────────────────────────
 
   pi.registerCommand("brain", {
-    description: "Browse recent project directories and their tool output logs",
+    description: "Browse recent project directories",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui.notify("Brain requires TUI mode", "error");
         return;
       }
-
-      // Flush any pending log entries before showing the UI
-      flushLogBuffer();
 
       const data = readSessions();
 
@@ -252,7 +207,6 @@ export function createExtension(
             openInEditor(dir.dir, ctx, spawnSync);
           },
           data,
-          (sid: string) => readLog(sid),
           {
             cwd: ctx.cwd,
             cwdBranch: getGitBranch(ctx.cwd),

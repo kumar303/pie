@@ -16,8 +16,8 @@
  *     invoke an editor.
  *
  * The store layer runs against a real temp directory via PI_BRAIN_DIR,
- * so persistence behavior (sessions.jsonl, status, logs, pruning) is
- * exercised through the real code paths.
+ * so persistence behavior (sessions.jsonl, status, and pruning) is exercised
+ * through the real code paths.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -48,7 +48,6 @@ const ESC = "\x1b";
 const UP = `${ESC}[A`;
 const DOWN = `${ESC}[B`;
 const ENTER = "\r";
-const TAB = "\t";
 const ESCAPE = ESC;
 const BACKSPACE = "\x7f";
 
@@ -353,7 +352,6 @@ function setEnv(dir: string) {
 function mkBrainDir(): string {
   const d = mkdtempSync(join(tmpdir(), "brain-int-"));
   mkdirSync(join(d, "status"), { recursive: true });
-  mkdirSync(join(d, "logs"), { recursive: true });
   return d;
 }
 
@@ -545,14 +543,25 @@ describe("session_start persists session entry", () => {
     expect(entry.lastFocused).toBeTypeOf("number");
   });
 
-  it("creates the data subdirectories", async () => {
+  it("creates status storage without log storage", async () => {
     const fresh = mkdtempSync(join(tmpdir(), "brain-fresh-"));
     setEnv(fresh);
     const h = setupExtension();
     await startSession(h, { cwd: "/tmp/x", sessionId: "sx" });
     expect(existsSync(join(fresh, "status"))).toBe(true);
-    expect(existsSync(join(fresh, "logs"))).toBe(true);
+    expect(existsSync(join(fresh, "logs"))).toBe(false);
     rmSync(fresh, { recursive: true, force: true });
+  });
+
+  it("does not store tool output", async () => {
+    const h = setupExtension();
+    const ctx = await startSession(h, { sessionId: "s1" });
+    await h.pi.fire(
+      "tool_result",
+      { toolName: "bash", content: [{ type: "text", text: "secret output" }] },
+      ctx,
+    );
+    expect(existsSync(join(tmpDir, "logs"))).toBe(false);
   });
 
   it("publishes sessions_changed when service connects", async () => {
@@ -627,69 +636,7 @@ describe("agent_start / agent_end update status", () => {
   });
 });
 
-describe("tool_result appends log entries", () => {
-  it("buffers tool_result and flushes when /brain is invoked", async () => {
-    const h = setupExtension();
-    const ctx = await startSession(h, { sessionId: "s1" });
-    await h.pi.fire(
-      "tool_result",
-      {
-        toolName: "bash",
-        content: [{ type: "text", text: "hello world" }],
-      },
-      ctx,
-    );
-    // Log file shouldn't exist yet (buffered) — but it might be flushed
-    // by the scheduled timer; force flush by opening /brain.
-    await openBrainUi(h, ctx);
-    const logRaw = readFileSync(join(tmpDir, "logs", "s1.log"), "utf-8");
-    expect(logRaw).toContain("[bash]");
-    expect(logRaw).toContain("hello world");
-  });
-
-  it("ignores tool_result with no text content", async () => {
-    const h = setupExtension();
-    const ctx = await startSession(h, { sessionId: "s1" });
-    await h.pi.fire(
-      "tool_result",
-      { toolName: "bash", content: [{ type: "image", data: "..." }] },
-      ctx,
-    );
-    await openBrainUi(h, ctx);
-    expect(existsSync(join(tmpDir, "logs", "s1.log"))).toBe(false);
-  });
-
-  it("ignores tool_result with no active session", async () => {
-    const h = setupExtension();
-    // No session_start fired
-    const ctx = makeMockCtx();
-    await h.pi.fire(
-      "tool_result",
-      { toolName: "bash", content: [{ type: "text", text: "orphan" }] },
-      ctx,
-    );
-    expect(existsSync(join(tmpDir, "logs"))).toBe(true);
-    // No log files written
-    const logsDir = join(tmpDir, "logs");
-    const fs = await import("node:fs");
-    expect(fs.readdirSync(logsDir)).toHaveLength(0);
-  });
-});
-
 describe("session_shutdown", () => {
-  it("flushes pending log entries", async () => {
-    const h = setupExtension();
-    const ctx = await startSession(h, { sessionId: "s1" });
-    await h.pi.fire(
-      "tool_result",
-      { toolName: "bash", content: [{ type: "text", text: "buffered" }] },
-      ctx,
-    );
-    await h.pi.fire("session_shutdown", {}, ctx);
-    const logRaw = readFileSync(join(tmpDir, "logs", "s1.log"), "utf-8");
-    expect(logRaw).toContain("buffered");
-  });
-
   it("writes idle status and publishes idle status", async () => {
     const h = setupExtension();
     const ctx = await startSession(h, { sessionId: "s1" });
@@ -731,7 +678,6 @@ describe("startup prunes old sessions", () => {
       }) + "\n",
     );
     writeFileSync(join(tmpDir, "status", "old.status"), '{"state":"idle"}');
-    writeFileSync(join(tmpDir, "logs", "old.log"), "old log\n");
 
     const h = setupExtension();
     await startSession(h, { sessionId: "new", cwd: "/tmp/new" });
@@ -746,7 +692,6 @@ describe("startup prunes old sessions", () => {
     expect(entries.find((e) => e.sessionId === "old")).toBeUndefined();
     expect(entries.find((e) => e.sessionId === "new")).toBeDefined();
     expect(existsSync(join(tmpDir, "status", "old.status"))).toBe(false);
-    expect(existsSync(join(tmpDir, "logs", "old.log"))).toBe(false);
   });
 });
 
@@ -793,7 +738,6 @@ async function seedAndOpenUi(opts?: {
     lastFocused?: number;
     timestamp?: number;
   }>;
-  logs?: Record<string, string[]>;
   statuses?: Record<string, "working" | "idle">;
 }) {
   const now = Date.now();
@@ -814,14 +758,6 @@ async function seedAndOpenUi(opts?: {
         lastFocused: s.lastFocused ?? now - i,
       }) + "\n";
   });
-  if (opts?.logs) {
-    for (const [sid, lines] of Object.entries(opts.logs)) {
-      writeFileSync(
-        join(tmpDir, "logs", `${sid}.log`),
-        lines.join("\n") + "\n",
-      );
-    }
-  }
   if (opts?.statuses) {
     for (const [sid, state] of Object.entries(opts.statuses)) {
       writeFileSync(
@@ -859,13 +795,14 @@ describe("/brain header", () => {
   });
 });
 
-describe("/brain panels", () => {
-  it("renders panel titles (Today, Earlier, Logs)", async () => {
+describe("/brain directory list", () => {
+  it("renders the Today and Earlier sections without a log panel", async () => {
     const { ui } = await seedAndOpenUi();
     const text = ui.renderText();
     expect(text).toContain("Today");
     expect(text).toContain("Earlier");
-    expect(text).toContain("Logs");
+    expect(text).not.toContain("Logs");
+    expect(text).not.toContain("│");
   });
 
   it("places a recent session in Today and an old one in Earlier", async () => {
@@ -914,13 +851,6 @@ describe("/brain panels", () => {
     expect(text).toContain("beta [feat/login]");
   });
 
-  it("shows log content for the focused session in panel B", async () => {
-    const { ui } = await seedAndOpenUi({
-      logs: { s1: ["[bash] log for s1", "line 1"] },
-    });
-    expect(ui.renderText()).toContain("log for s1");
-  });
-
   it("respects width — no rendered line exceeds the requested width", async () => {
     const { ui } = await seedAndOpenUi();
     const width = 60;
@@ -938,7 +868,7 @@ describe("/brain panels", () => {
     const text = ui.renderText();
     expect(text).toContain("Today");
     expect(text).toContain("Earlier");
-    expect(text).toContain("Logs");
+    expect(text).not.toContain("Logs");
   });
 });
 
@@ -1018,33 +948,6 @@ describe("/brain navigation", () => {
     ui.fireInput(DOWN); // delta
     expect(ui.renderText()).toContain("> delta");
   });
-
-  it("refreshes the log panel as the cursor moves", async () => {
-    const { ui } = await seedAndOpenUi({
-      logs: {
-        s1: ["log for s1"],
-        s2: ["log for s2"],
-      },
-    });
-    expect(ui.renderText()).toContain("log for s1");
-    ui.fireInput(DOWN);
-    expect(ui.renderText()).toContain("log for s2");
-  });
-});
-
-describe("/brain TAB switches focus", () => {
-  it("TAB moves focus to logs panel and shows scroll legend", async () => {
-    const { ui } = await seedAndOpenUi();
-    ui.fireInput(TAB);
-    expect(ui.renderText()).toContain("↑↓ scroll");
-  });
-
-  it("TAB twice returns to dirs panel", async () => {
-    const { ui } = await seedAndOpenUi();
-    ui.fireInput(TAB);
-    ui.fireInput(TAB);
-    expect(ui.renderText()).toContain("↑↓ navigate");
-  });
 });
 
 describe("/brain search", () => {
@@ -1106,94 +1009,6 @@ describe("/brain search", () => {
   });
 });
 
-describe("/brain log content sanitization", () => {
-  it("strips tabs from log lines so width is respected", async () => {
-    const { ui } = await seedAndOpenUi({
-      logs: {
-        s1: [
-          "\t\t\tconst x = 1;",
-          "\t\tif (true) {",
-          "\t\t\t\treturn x;",
-          "\t}",
-        ],
-      },
-    });
-    const lines = ui.render(80).map(stripAnsi);
-    for (const line of lines) {
-      expect(line.length).toBeLessThanOrEqual(80);
-      expect(line).not.toContain("\t");
-    }
-  });
-
-  it("strips carriage returns", async () => {
-    const { ui } = await seedAndOpenUi({
-      logs: {
-        s1: ["before", "progress\rthis should not reset", "after"],
-      },
-    });
-    expect(ui.render(100).join("\n")).not.toContain("\r");
-  });
-
-  it("strips ANSI cursor/control escape sequences", async () => {
-    const { ui } = await seedAndOpenUi({
-      logs: {
-        s1: [
-          "before",
-          "\u001b[2K\u001b[1Grewritten line",
-          "\u001b]0;window-title\u0007after-title",
-          "after",
-        ],
-      },
-    });
-    const rendered = ui.render(100).join("\n");
-    expect(rendered).not.toContain("\u001b[2K");
-    expect(rendered).not.toContain("\u001b[1G");
-    expect(rendered).not.toContain("\u001b]0;");
-    expect(rendered).toContain("rewritten line");
-    expect(rendered).toContain("after-title");
-  });
-});
-
-describe("/brain log scrolling", () => {
-  function longLog(n = 50): string[] {
-    return Array.from({ length: n }, (_, i) => `log line ${i}`);
-  }
-
-  it("g jumps to top, G jumps to bottom of logs", async () => {
-    const { ui } = await seedAndOpenUi({ logs: { s1: longLog() } });
-    ui.fireInput(TAB);
-    ui.fireInput("g");
-    expect(ui.renderText()).toContain("log line 0");
-    ui.fireInput(String.fromCharCode(71)); // 'G'
-    expect(ui.renderText()).toContain("log line 49");
-  });
-
-  it("does not scroll past the end", async () => {
-    const { ui } = await seedAndOpenUi({
-      logs: { s1: Array.from({ length: 8 }, (_, i) => `log line ${i}`) },
-    });
-    ui.fireInput(TAB);
-    for (let i = 0; i < 20; i++) ui.fireInput(DOWN);
-    const lines = ui.render(80).map(stripAnsi);
-    const sepIdx = lines.findLastIndex((l) => /^─+$/.test(l.trim()));
-    const contentRows = lines.slice(2, sepIdx);
-    const rightContent = contentRows.map((row) => {
-      const dividerPos = row.indexOf("│");
-      return dividerPos >= 0 ? row.slice(dividerPos + 1).trim() : "";
-    });
-    const lastNonEmpty = rightContent.findLastIndex((r) => r.length > 0);
-    expect(rightContent[lastNonEmpty]).toContain("log line 7");
-  });
-
-  it("d/u page through the logs", async () => {
-    const { ui } = await seedAndOpenUi({ logs: { s1: longLog() } });
-    ui.fireInput(TAB);
-    ui.fireInput("g");
-    ui.fireInput("d");
-    expect(ui.renderText()).not.toContain("log line 0");
-  });
-});
-
 describe("/brain ESC exits", () => {
   it("ESC from dirs panel calls done() (resolves the ui.custom)", async () => {
     const h = setupExtension();
@@ -1202,15 +1017,6 @@ describe("/brain ESC exits", () => {
     ui.fireInput(ESCAPE);
     // The ui.custom promise should now resolve.
     await ui.cmdPromise; // does not throw / hang
-  });
-
-  it("ESC from logs panel also exits", async () => {
-    const h = setupExtension();
-    const ctx = makeMockCtx();
-    const ui = await openBrainUi(h, ctx);
-    ui.fireInput(TAB);
-    ui.fireInput(ESCAPE);
-    await ui.cmdPromise;
   });
 });
 
@@ -1750,41 +1556,6 @@ describe("readSessions semantics (asserted via /brain UI)", () => {
   });
 });
 
-describe("log writes truncate to last 100 lines", () => {
-  it("readLog returns at most 100 lines after many appends", async () => {
-    const h = setupExtension();
-    const ctx = await startSession(h, { sessionId: "s1" });
-    for (let i = 0; i < 60; i++) {
-      await h.pi.fire(
-        "tool_result",
-        {
-          toolName: "bash",
-          content: [{ type: "text", text: `line-${i}\nline-${i}-b` }],
-        },
-        ctx,
-      );
-    }
-    const ui = await openBrainUi(h, ctx);
-    const lines = ui.render(200).map(stripAnsi);
-    // Right pane (after │) only contains visible log lines from the trim.
-    const rightLines = lines
-      .map((row) => {
-        const dividerPos = row.indexOf("│");
-        return dividerPos >= 0 ? row.slice(dividerPos + 1) : "";
-      })
-      .filter((l) => l.trim().length > 0);
-    // The truncation is enforced when the log file is written; verifying
-    // through the UI is sufficient: there's a finite, non-explosive log.
-    expect(rightLines.length).toBeLessThan(200);
-  });
-});
-
-// ──────────────────────────────────────────────────────────────────────
-// Coverage parity with the deleted brain.test.ts and store.test.ts.
-// Each `describe` below maps to one or more deleted test names that
-// weren't otherwise asserted in the integration tests above.
-// ──────────────────────────────────────────────────────────────────────
-
 describe("inbound idle status clears the spinner", () => {
   // From deleted brain.test.ts → "clears active flag when status is idle".
   it("removes the spinner after a working session goes idle", async () => {
@@ -1910,7 +1681,7 @@ describe("ENTER from search", () => {
   });
 });
 
-describe("pruneOldSessions cleans up status and log files", () => {
+describe("pruneOldSessions cleans up status files", () => {
   // From deleted store.test.ts → "does not remove files for sessions
   // still referenced". The companion case ("removes entries and files")
   // is already covered by "removes entries older than 180 days from
@@ -1919,7 +1690,7 @@ describe("pruneOldSessions cleans up status and log files", () => {
     const now = Date.now();
     const veryOld = now - 200 * 24 * 60 * 60 * 1000;
     // `keepMe` has both an old entry (would prune) and a recent entry
-    // (keeps it referenced) — the files must survive.
+    // (keeps it referenced) — the status file must survive.
     writeFileSync(
       join(tmpDir, "sessions.jsonl"),
       JSON.stringify({
@@ -1943,10 +1714,8 @@ describe("pruneOldSessions cleans up status and log files", () => {
       join(tmpDir, "status", "keepMe.status"),
       JSON.stringify({ state: "idle", updatedAt: now }),
     );
-    writeFileSync(join(tmpDir, "logs", "keepMe.log"), "recent line\n");
     const h = setupExtension();
     await startSession(h, { sessionId: "current" });
     expect(existsSync(join(tmpDir, "status", "keepMe.status"))).toBe(true);
-    expect(existsSync(join(tmpDir, "logs", "keepMe.log"))).toBe(true);
   });
 });

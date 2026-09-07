@@ -1,9 +1,7 @@
 /**
  * Brain TUI component.
  *
- * Three-panel layout for browsing recent project directories and their logs.
- * Matches the git extension's split-pane pattern: header row, accent border,
- * content rows with │ divider, bottom separator, legend.
+ * Single-panel layout for browsing recent project directories.
  */
 
 import {
@@ -11,21 +9,14 @@ import {
   matchesKey,
   Key,
   truncateToWidth,
-  visibleWidth,
   type Component,
 } from "@earendil-works/pi-tui";
+import { basename } from "node:path";
 import { filterDirs, type BrainData, type DirEntry } from "./store.js";
 import type { StatusMessage, ErrorMessage } from "./service.js";
-import { basename } from "node:path";
-
-// ── Types ───────────────────────────────────────────────────────────
-
-type FocusedPanel = "dirs" | "logs";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 100;
-
-// ── Component ───────────────────────────────────────────────────────
 
 export interface BrainComponentOptions {
   cwd?: string;
@@ -41,19 +32,13 @@ export class BrainComponent implements Component {
   private theme: any;
   private onDone: () => void;
   private onOpenDir: (dir: DirEntry) => void;
-  private readLogFn: (sessionId: string) => string[];
   private readSessionsFn?: () => BrainData;
   private cwd: string;
   private cwdBranch: string | null;
   private sessionId: string | null;
-
   private data: BrainData;
 
-  // State
-  private focusedPanel: FocusedPanel = "dirs";
-  private cursor = 0; // index into the unified filtered list (today + earlier)
-  private logScrollOffset = 0;
-  private logLines: string[] = [];
+  private cursor = 0;
   private earlierScrollOffset = 0;
   private searchMode = false;
   private searchQuery = "";
@@ -62,8 +47,8 @@ export class BrainComponent implements Component {
   private spinnerFrame = 0;
   private spinnerTimer: ReturnType<typeof setInterval> | null = null;
   private errorNotification: string | null = null;
+  private lastRenderedEarlierSlots = 10;
 
-  // Cache
   private cachedLines?: string[];
   private cachedWidth?: number;
 
@@ -73,7 +58,6 @@ export class BrainComponent implements Component {
     onDone: () => void,
     onOpenDir: (dir: DirEntry) => void,
     data: BrainData,
-    readLogFn: (sessionId: string) => string[],
     options?: BrainComponentOptions,
   ) {
     this.tui = tui;
@@ -81,15 +65,12 @@ export class BrainComponent implements Component {
     this.onDone = onDone;
     this.onOpenDir = onOpenDir;
     this.data = data;
-    this.readLogFn = readLogFn;
     this.readSessionsFn = options?.readSessionsFn;
     this.cwd = options?.cwd ?? process.cwd();
     this.cwdBranch = options?.cwdBranch ?? null;
     this.sessionId = options?.sessionId ?? null;
     this.filteredToday = data.today;
     this.filteredEarlier = data.earlier;
-
-    this.refreshLog();
     this.maybeStartSpinner();
   }
 
@@ -100,13 +81,11 @@ export class BrainComponent implements Component {
     }
   }
 
-  /** Handle a status message from the pub/sub service. */
   handleStatusMessage(msg: StatusMessage): void {
-    const allDirs = [...this.data.today, ...this.data.earlier];
-    for (const d of allDirs) {
-      if (d.sessionId === msg.sessionId) {
-        d.active = msg.state === "working";
-        d.branch = msg.branch;
+    for (const dir of [...this.data.today, ...this.data.earlier]) {
+      if (dir.sessionId === msg.sessionId) {
+        dir.active = msg.state === "working";
+        dir.branch = msg.branch;
       }
     }
     this.maybeStartSpinner();
@@ -114,7 +93,6 @@ export class BrainComponent implements Component {
     this.tui.requestRender();
   }
 
-  /** Handle a sessions_changed message: re-read sessions and refresh the list. */
   handleSessionsChanged(): void {
     if (!this.readSessionsFn) return;
     this.data = this.readSessionsFn();
@@ -124,33 +102,29 @@ export class BrainComponent implements Component {
     this.filteredEarlier = this.searchQuery
       ? filterDirs(this.data.earlier, this.searchQuery)
       : this.data.earlier;
-    // Clamp cursor
-    const len = this.unifiedList.length;
-    if (this.cursor >= len) this.cursor = Math.max(0, len - 1);
-    this.refreshLog();
+    if (this.cursor >= this.unifiedList.length) {
+      this.cursor = Math.max(0, this.unifiedList.length - 1);
+    }
+    this.ensureCursorVisible();
+    this.maybeStartSpinner();
     this.invalidate();
     this.tui.requestRender();
   }
 
-  /** Handle an error message from the pub/sub service. */
   handleError(msg: ErrorMessage): void {
     this.errorNotification = msg.message;
     this.invalidate();
     this.tui.requestRender();
   }
 
-  /**
-   * Start/stop the spinner animation interval.
-   * This interval only animates — it never reads files or polls.
-   */
   private maybeStartSpinner(): void {
     const hasActive = [...this.data.today, ...this.data.earlier].some(
-      (d) => d.active,
+      (dir) => dir.active,
     );
     if (hasActive && !this.spinnerTimer) {
       this.spinnerTimer = setInterval(() => {
         const stillActive = [...this.data.today, ...this.data.earlier].some(
-          (d) => d.active,
+          (dir) => dir.active,
         );
         if (!stillActive) {
           clearInterval(this.spinnerTimer!);
@@ -167,7 +141,6 @@ export class BrainComponent implements Component {
     }
   }
 
-  /** The unified filtered list: today items then earlier items. */
   private get unifiedList(): DirEntry[] {
     return [...this.filteredToday, ...this.filteredEarlier];
   }
@@ -176,7 +149,6 @@ export class BrainComponent implements Component {
     return this.unifiedList[this.cursor] ?? null;
   }
 
-  /** If the selected entry is the current session, just exit; otherwise open it. */
   private openOrExit(dir: DirEntry): void {
     if (this.sessionId && dir.sessionId === this.sessionId) {
       this.onDone();
@@ -185,33 +157,16 @@ export class BrainComponent implements Component {
     }
   }
 
-  private refreshLog(): void {
-    const dir = this.selectedDir();
-    if (dir) {
-      this.logLines = this.readLogFn(dir.sessionId);
-    } else {
-      this.logLines = [];
-    }
-    this.logScrollOffset = this.maxLogScroll();
-  }
-
   private applyFilter(): void {
     this.filteredToday = filterDirs(this.data.today, this.searchQuery);
     this.filteredEarlier = filterDirs(this.data.earlier, this.searchQuery);
     this.cursor = 0;
     this.earlierScrollOffset = 0;
-    this.refreshLog();
   }
-
-  // ── Input handling ──────────────────────────────────────────────
 
   handleInput(data: string): void {
     if (this.searchMode) {
       this.handleSearchInput(data);
-      return;
-    }
-    if (this.focusedPanel === "logs") {
-      this.handleLogsInput(data);
       return;
     }
     this.handleDirListInput(data);
@@ -220,12 +175,6 @@ export class BrainComponent implements Component {
   private handleDirListInput(data: string): void {
     if (matchesKey(data, Key.escape)) {
       this.onDone();
-      return;
-    }
-    if (matchesKey(data, Key.tab)) {
-      this.focusedPanel = "logs";
-      this.invalidate();
-      this.tui.requestRender();
       return;
     }
     if (matchesKey(data, "/")) {
@@ -242,228 +191,142 @@ export class BrainComponent implements Component {
     }
     if (matchesKey(data, Key.up)) {
       this.moveCursor(-1);
-      this.refreshLog();
       this.ensureCursorVisible();
-      this.invalidate();
-      this.tui.requestRender();
+      this.requestRender();
       return;
     }
     if (matchesKey(data, Key.down)) {
       this.moveCursor(1);
-      this.refreshLog();
       this.ensureCursorVisible();
-      this.invalidate();
-      this.tui.requestRender();
+      this.requestRender();
       return;
     }
-    // Earlier-section scrolling (only when cursor is in earlier section)
-    if (this.isCursorInEarlier()) {
-      if (matchesKey(data, "d")) {
-        const h = Math.max(1, Math.floor(this.getEarlierVisibleCount() / 2));
-        const newIdx = Math.min(
-          this.filteredEarlier.length - 1,
-          this.cursorEarlierIndex() + h,
-        );
-        this.cursor = this.filteredToday.length + newIdx;
-        this.earlierScrollOffset = Math.min(
-          this.maxEarlierScroll(),
-          this.earlierScrollOffset + h,
-        );
-        this.refreshLog();
-        this.invalidate();
-        this.tui.requestRender();
-        return;
-      }
-      if (matchesKey(data, "u")) {
-        const h = Math.max(1, Math.floor(this.getEarlierVisibleCount() / 2));
-        const newIdx = Math.max(0, this.cursorEarlierIndex() - h);
-        this.cursor = this.filteredToday.length + newIdx;
-        this.earlierScrollOffset = Math.max(0, this.earlierScrollOffset - h);
-        this.refreshLog();
-        this.invalidate();
-        this.tui.requestRender();
-        return;
-      }
-      if (matchesKey(data, "g")) {
-        this.cursor = this.filteredToday.length;
-        this.earlierScrollOffset = 0;
-        this.refreshLog();
-        this.invalidate();
-        this.tui.requestRender();
-        return;
-      }
-      if (matchesKey(data, Key.shift("g"))) {
-        this.cursor =
-          this.filteredToday.length + this.filteredEarlier.length - 1;
-        this.earlierScrollOffset = this.maxEarlierScroll();
-        this.refreshLog();
-        this.invalidate();
-        this.tui.requestRender();
-        return;
-      }
-    }
-  }
+    if (!this.isCursorInEarlier()) return;
 
-  private handleLogsInput(data: string): void {
-    if (matchesKey(data, Key.escape)) {
-      this.onDone();
-      return;
-    }
-    if (matchesKey(data, Key.tab)) {
-      this.focusedPanel = "dirs";
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-    if (matchesKey(data, Key.up)) {
-      this.logScrollOffset = Math.max(0, this.logScrollOffset - 1);
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-    if (matchesKey(data, Key.down)) {
-      this.logScrollOffset = Math.min(
-        this.maxLogScroll(),
-        this.logScrollOffset + 1,
-      );
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
     if (matchesKey(data, "d")) {
-      const h = Math.max(1, Math.floor(this.getLogPanelHeight() / 2));
-      this.logScrollOffset = Math.min(
-        this.maxLogScroll(),
-        this.logScrollOffset + h,
+      const amount = Math.max(1, Math.floor(this.getEarlierVisibleCount() / 2));
+      const index = Math.min(
+        this.filteredEarlier.length - 1,
+        this.cursorEarlierIndex() + amount,
       );
-      this.invalidate();
-      this.tui.requestRender();
+      this.cursor = this.filteredToday.length + index;
+      this.earlierScrollOffset = Math.min(
+        this.maxEarlierScroll(),
+        this.earlierScrollOffset + amount,
+      );
+      this.requestRender();
       return;
     }
     if (matchesKey(data, "u")) {
-      const h = Math.max(1, Math.floor(this.getLogPanelHeight() / 2));
-      this.logScrollOffset = Math.max(0, this.logScrollOffset - h);
-      this.invalidate();
-      this.tui.requestRender();
+      const amount = Math.max(1, Math.floor(this.getEarlierVisibleCount() / 2));
+      const index = Math.max(0, this.cursorEarlierIndex() - amount);
+      this.cursor = this.filteredToday.length + index;
+      this.earlierScrollOffset = Math.max(0, this.earlierScrollOffset - amount);
+      this.requestRender();
       return;
     }
     if (matchesKey(data, "g")) {
-      this.logScrollOffset = 0;
-      this.invalidate();
-      this.tui.requestRender();
+      this.cursor = this.filteredToday.length;
+      this.earlierScrollOffset = 0;
+      this.requestRender();
       return;
     }
     if (matchesKey(data, Key.shift("g"))) {
-      this.logScrollOffset = this.maxLogScroll();
-      this.invalidate();
-      this.tui.requestRender();
-      return;
+      this.cursor = this.unifiedList.length - 1;
+      this.earlierScrollOffset = this.maxEarlierScroll();
+      this.requestRender();
     }
   }
 
   private handleSearchInput(data: string): void {
     if (matchesKey(data, Key.escape)) {
-      this.searchMode = false;
-      this.searchQuery = "";
-      this.filteredToday = this.data.today;
-      this.filteredEarlier = this.data.earlier;
-      this.cursor = 0;
-      this.refreshLog();
-      this.invalidate();
-      this.tui.requestRender();
+      this.clearSearch();
+      this.requestRender();
       return;
     }
     if (matchesKey(data, Key.enter)) {
       this.searchMode = false;
       const dir = this.selectedDir();
       if (dir) this.openOrExit(dir);
-      this.invalidate();
-      this.tui.requestRender();
+      this.requestRender();
       return;
     }
     if (matchesKey(data, Key.up)) {
       this.moveCursor(-1);
-      this.refreshLog();
       this.ensureCursorVisible();
-      this.invalidate();
-      this.tui.requestRender();
+      this.requestRender();
       return;
     }
     if (matchesKey(data, Key.down)) {
       this.moveCursor(1);
-      this.refreshLog();
       this.ensureCursorVisible();
-      this.invalidate();
-      this.tui.requestRender();
+      this.requestRender();
       return;
     }
     if (matchesKey(data, Key.backspace)) {
-      if (this.searchQuery.length === 0) {
-        this.searchMode = false;
-        this.filteredToday = this.data.today;
-        this.filteredEarlier = this.data.earlier;
-        this.cursor = 0;
-        this.refreshLog();
+      if (this.searchQuery.length <= 1) {
+        this.clearSearch();
       } else {
         this.searchQuery = this.searchQuery.slice(0, -1);
-        if (this.searchQuery.length === 0) {
-          this.searchMode = false;
-          this.filteredToday = this.data.today;
-          this.filteredEarlier = this.data.earlier;
-          this.cursor = 0;
-          this.refreshLog();
-        } else {
-          this.applyFilter();
-        }
+        this.applyFilter();
       }
-      this.invalidate();
-      this.tui.requestRender();
+      this.requestRender();
       return;
     }
-    // Decode printable character (Kitty protocol or raw byte)
-    const ch = this.decodePrintable(data);
-    if (ch && /[a-zA-Z0-9\-_./@ {}#~+=]/.test(ch)) {
-      this.searchQuery += ch;
+
+    const printable = this.decodePrintable(data);
+    if (printable && /[a-zA-Z0-9\-_./@ {}#~+=]/.test(printable)) {
+      this.searchQuery += printable;
       this.applyFilter();
-      this.invalidate();
-      this.tui.requestRender();
-      return;
+      this.requestRender();
     }
   }
 
-  /** Extract a printable character from raw input (Kitty protocol or legacy). */
-  private decodePrintable(rawData: string): string | undefined {
-    const kittyChar = decodeKittyPrintable(rawData);
-    if (kittyChar) return kittyChar;
-    if (rawData.length === 1) {
-      const code = rawData.charCodeAt(0);
-      if (code >= 32 && code <= 126) return rawData;
+  private decodePrintable(data: string): string | undefined {
+    const kittyCharacter = decodeKittyPrintable(data);
+    if (kittyCharacter) return kittyCharacter;
+    if (data.length === 1) {
+      const code = data.charCodeAt(0);
+      if (code >= 32 && code <= 126) return data;
     }
     return undefined;
   }
 
+  private clearSearch(): void {
+    this.searchMode = false;
+    this.searchQuery = "";
+    this.filteredToday = this.data.today;
+    this.filteredEarlier = this.data.earlier;
+    this.cursor = 0;
+    this.earlierScrollOffset = 0;
+  }
+
+  private requestRender(): void {
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
   private moveCursor(delta: number): void {
-    const len = this.unifiedList.length;
-    if (len === 0) return;
-    this.cursor = (this.cursor + delta + len) % len;
+    const length = this.unifiedList.length;
+    if (length === 0) return;
+    this.cursor = (this.cursor + delta + length) % length;
   }
 
-  /** Whether the cursor is currently pointing at an item in the earlier section. */
   private isCursorInEarlier(): boolean {
-    return this.cursor >= this.filteredToday.length;
+    return (
+      this.cursor >= this.filteredToday.length &&
+      this.filteredEarlier.length > 0
+    );
   }
 
-  /** Index of the cursor within the earlier list (0-based). */
   private cursorEarlierIndex(): number {
     return this.cursor - this.filteredToday.length;
   }
 
-  /** Number of earlier items that can be displayed at once. */
   private getEarlierVisibleCount(): number {
     return this.lastRenderedEarlierSlots;
   }
 
-  /** Maximum scroll offset for the earlier section. */
   private maxEarlierScroll(): number {
     return Math.max(
       0,
@@ -471,72 +334,17 @@ export class BrainComponent implements Component {
     );
   }
 
-  /** Ensure the cursor is visible within the earlier scroll window. */
   private ensureCursorVisible(): void {
     if (!this.isCursorInEarlier()) return;
-    const idx = this.cursorEarlierIndex();
-    if (idx < this.earlierScrollOffset) {
-      this.earlierScrollOffset = idx;
+    const index = this.cursorEarlierIndex();
+    if (index < this.earlierScrollOffset) {
+      this.earlierScrollOffset = index;
     } else if (
-      idx >=
+      index >=
       this.earlierScrollOffset + this.getEarlierVisibleCount()
     ) {
-      this.earlierScrollOffset = idx - this.getEarlierVisibleCount() + 1;
+      this.earlierScrollOffset = index - this.getEarlierVisibleCount() + 1;
     }
-  }
-
-  private lastRenderedLogPanelHeight = 10;
-  private lastRenderedEarlierSlots = 10;
-  private getLogPanelHeight(): number {
-    return this.lastRenderedLogPanelHeight;
-  }
-
-  /** Maximum scroll offset that keeps the last log line at the bottom of the panel. */
-  private maxLogScroll(): number {
-    return Math.max(0, this.logLines.length - this.getLogPanelHeight());
-  }
-
-  // ── Rendering ───────────────────────────────────────────────────
-
-  /**
-   * Sanitize log lines for safe TUI rendering.
-   * - Tabs are expanded for stable width calculations
-   * - Carriage returns are removed so logs cannot rewrite earlier columns
-   * - ANSI escape/control sequences are stripped to avoid cursor movement
-   */
-  private sanitizeLine(line: string): string {
-    return (
-      line
-        .replace(/\t/g, "  ")
-        .replace(/\r/g, "")
-        /* eslint-disable no-control-regex */
-        // CSI sequences (e.g. \x1b[2K, colors, cursor movement)
-        .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
-        // OSC sequences (e.g. \x1b]0;title\x07)
-        .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g, "")
-        // Remaining C0 control chars (except newline, already split by lines)
-        .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, "")
-      /* eslint-enable no-control-regex */
-    );
-  }
-
-  private padTo(str: string, w: number): string {
-    const vis = visibleWidth(str);
-    if (vis >= w) return truncateToWidth(str, w);
-    return str + " ".repeat(w - vis);
-  }
-
-  private row(
-    left: string,
-    right: string,
-    lw: number,
-    rw: number,
-    width: number,
-  ): string {
-    return truncateToWidth(
-      this.padTo(left, lw) + this.theme.fg("dim", "│") + this.padTo(right, rw),
-      width,
-    );
   }
 
   invalidate(): void {
@@ -549,107 +357,51 @@ export class BrainComponent implements Component {
 
     const theme = this.theme;
     const lines: string[] = [];
-    const lw = Math.max(20, Math.floor(width * 0.4));
-    const rw = width - lw - 1;
+    const cwdBranchLabel = this.cwdBranch
+      ? theme.fg("muted", ` [${this.cwdBranch}]`)
+      : "";
+    lines.push(
+      truncateToWidth(
+        theme.fg("accent", theme.bold(" ▶ " + basename(this.cwd))) +
+          cwdBranchLabel,
+        width,
+      ),
+    );
+    lines.push(truncateToWidth(theme.fg("accent", "═".repeat(width)), width));
 
-    // Build left-pane content: a flat list of rows with section headers inline
-    const leftRows: string[] = [];
-
-    // "Today" section header
-    leftRows.push(theme.fg("dim", "   Today"));
-
-    // Today items (always show all)
-    const todayCount = this.filteredToday.length;
-    if (todayCount === 0) {
-      leftRows.push(theme.fg("dim", "       (none)"));
+    const content: string[] = [theme.fg("dim", "   Today")];
+    if (this.filteredToday.length === 0) {
+      content.push(theme.fg("dim", "       (none)"));
     } else {
-      for (let i = 0; i < todayCount; i++) {
-        leftRows.push(this.renderDirEntry(i, lw));
+      for (let index = 0; index < this.filteredToday.length; index++) {
+        content.push(this.renderDirEntry(index, width));
       }
     }
 
-    // Blank line between Today and Earlier
-    leftRows.push("");
-
-    // "Earlier" section header
-    leftRows.push(theme.fg("dim", "   Earlier"));
-
-    // Calculate how many rows are available for earlier items
-    const minContentRows = 20;
-    const todaySectionRows = leftRows.length; // headers + today items + blank + earlier header
-    const earlierSlots = Math.max(1, minContentRows - todaySectionRows);
-    this.lastRenderedEarlierSlots = earlierSlots;
-
-    // Clamp earlier scroll offset
+    content.push("", theme.fg("dim", "   Earlier"));
+    const minimumRows = 20;
+    this.lastRenderedEarlierSlots = Math.max(1, minimumRows - content.length);
     this.earlierScrollOffset = Math.min(
       this.earlierScrollOffset,
       this.maxEarlierScroll(),
     );
 
-    // Earlier items (scrolled window)
     if (this.filteredEarlier.length === 0) {
-      leftRows.push(theme.fg("dim", "       (none)"));
+      content.push(theme.fg("dim", "       (none)"));
     } else {
-      const visibleStart = this.earlierScrollOffset;
-      const visibleEnd = Math.min(
+      const end = Math.min(
         this.filteredEarlier.length,
-        visibleStart + earlierSlots,
+        this.earlierScrollOffset + this.lastRenderedEarlierSlots,
       );
-      for (let i = visibleStart; i < visibleEnd; i++) {
-        leftRows.push(this.renderDirEntry(todayCount + i, lw));
+      for (let index = this.earlierScrollOffset; index < end; index++) {
+        content.push(
+          this.renderDirEntry(this.filteredToday.length + index, width),
+        );
       }
     }
 
-    // Ensure a minimum height so logs are always readable
-    while (leftRows.length < minContentRows) {
-      leftRows.push("");
-    }
-
-    const totalRows = leftRows.length;
-    this.lastRenderedLogPanelHeight = totalRows;
-
-    // Clamp scroll offset now that we know the real panel height
-    this.logScrollOffset = Math.min(this.logScrollOffset, this.maxLogScroll());
-
-    // Header row — show cwd with branch
-    const leftFocused = this.focusedPanel === "dirs";
-    const logsFocused = this.focusedPanel === "logs";
-    const cwdName = basename(this.cwd);
-    const cwdBranchLabel = this.cwdBranch
-      ? theme.fg("muted", ` [${this.cwdBranch}]`)
-      : "";
-    const dirsHeader = leftFocused
-      ? theme.fg("accent", theme.bold(" ▶ " + cwdName)) + cwdBranchLabel
-      : theme.fg("dim", "   " + cwdName) + cwdBranchLabel;
-    const logsHeader = logsFocused
-      ? theme.fg("accent", theme.bold(" ▶ Logs"))
-      : theme.fg("dim", "   Logs");
-    lines.push(this.row(dirsHeader, logsHeader, lw, rw, width));
-
-    // Accent border
-    const leftBorder = leftFocused ? "═" : "─";
-    const rightBorder = logsFocused ? "═" : "─";
-    lines.push(
-      truncateToWidth(
-        theme.fg(leftFocused ? "accent" : "dim", leftBorder.repeat(lw)) +
-          theme.fg("dim", "│") +
-          theme.fg(logsFocused ? "accent" : "dim", rightBorder.repeat(rw)),
-        width,
-      ),
-    );
-
-    // Content rows: left sections paired with log lines (bottom-aligned)
-    const logTopPadding = Math.max(0, totalRows - this.logLines.length);
-    for (let i = 0; i < totalRows; i++) {
-      const logIdx = this.logScrollOffset + (i - logTopPadding);
-      const right =
-        logIdx >= 0 && logIdx < this.logLines.length
-          ? " " + this.sanitizeLine(this.logLines[logIdx])
-          : "";
-      lines.push(this.row(leftRows[i], right, lw, rw, width));
-    }
-
-    // Bottom separator + legend
+    while (content.length < minimumRows) content.push("");
+    lines.push(...content.map((line) => truncateToWidth(line, width)));
     lines.push(truncateToWidth(theme.fg("dim", "─".repeat(width)), width));
     if (this.errorNotification) {
       lines.push(
@@ -666,60 +418,40 @@ export class BrainComponent implements Component {
     return lines;
   }
 
-  private renderDirEntry(unifiedIndex: number, maxWidth: number): string {
-    const theme = this.theme;
+  private renderDirEntry(unifiedIndex: number, width: number): string {
     const entry = this.unifiedList[unifiedIndex];
     if (!entry) return "";
-    const isSelected =
-      this.focusedPanel === "dirs" && unifiedIndex === this.cursor;
 
-    let prefix: string;
-    if (entry.active) {
-      prefix = theme.fg("accent", SPINNER_FRAMES[this.spinnerFrame]) + " ";
-    } else {
-      prefix = "  ";
-    }
-
-    const name = basename(entry.dir);
-    const branchSuffix = entry.branch
-      ? theme.fg("muted", ` [${entry.branch}]`)
+    const prefix = entry.active
+      ? this.theme.fg("accent", SPINNER_FRAMES[this.spinnerFrame]) + " "
+      : "  ";
+    const branch = entry.branch
+      ? this.theme.fg("muted", ` [${entry.branch}]`)
       : "";
-
-    if (isSelected) {
-      return truncateToWidth(
-        "   " + prefix + theme.fg("accent", "> " + name) + branchSuffix,
-        maxWidth,
-      );
-    }
-    return truncateToWidth(
-      "   " + prefix + "  " + theme.fg("text", name) + branchSuffix,
-      maxWidth,
-    );
+    const name = basename(entry.dir);
+    const renderedName =
+      unifiedIndex === this.cursor
+        ? this.theme.fg("accent", "> " + name)
+        : "  " + this.theme.fg("text", name);
+    return truncateToWidth("   " + prefix + renderedName + branch, width);
   }
 
   private renderLegend(): string {
-    const theme = this.theme;
     if (this.searchMode) {
-      return theme.fg(
+      return this.theme.fg(
         "dim",
         ` / ${this.searchQuery}_ • ↑↓ navigate • enter accept • esc clear`,
-      );
-    }
-    if (this.focusedPanel === "logs") {
-      return theme.fg(
-        "dim",
-        " ↑↓ scroll • d page down • u page up • g top • G bottom • tab back • esc quit",
       );
     }
     if (
       this.isCursorInEarlier() &&
       this.filteredEarlier.length > this.getEarlierVisibleCount()
     ) {
-      return theme.fg(
+      return this.theme.fg(
         "dim",
-        " ↑↓ navigate • d page down • u page up • g top • G bottom • tab logs • / search • esc quit",
+        " ↑↓ navigate • d page down • u page up • g top • G bottom • / search • esc quit",
       );
     }
-    return theme.fg("dim", " ↑↓ navigate • tab logs • / search • esc quit");
+    return this.theme.fg("dim", " ↑↓ navigate • / search • esc quit");
   }
 }

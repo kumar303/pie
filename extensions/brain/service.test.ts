@@ -23,7 +23,6 @@ const cleanupClients: Client[] = [];
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "brain-svc-test-"));
   mkdirSync(join(tmpDir, "status"), { recursive: true });
-  mkdirSync(join(tmpDir, "logs"), { recursive: true });
 });
 
 afterEach(async () => {
