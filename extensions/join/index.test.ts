@@ -267,7 +267,7 @@ describe("join extension", () => {
     await command(harness, "");
 
     expect(harness.widgets.get("/join")).toBe(
-      "🌍🪐 /join 👽🌎 · pie1 · peers: none",
+      "/join 👽🪐🌎 · pie1 · peers: none",
     );
     const registryPath = join(home, "channels", "__default__.json");
     const registry = await readChannelRegistry("__default__");
@@ -407,10 +407,10 @@ describe("join extension", () => {
     });
 
     expect(first.widgets.get("/join")).toBe(
-      "🌍🪐 /join team 👽🌎 · pie1 · peers: pie2",
+      "/join team 👽🪐🌎 · pie1 · peers: pie2",
     );
     expect(second.widgets.get("/join")).toBe(
-      "🌍🪐 /join team 👽🌎 · pie2 · peers: pie1",
+      "/join team 👽🪐🌎 · pie2 · peers: pie1",
     );
 
     const result = await tool(first, "join_send", {
@@ -465,7 +465,7 @@ describe("join extension", () => {
     });
     expect(resultText(result)).toMatch(/^Delivery to "pie2" failed: .+/);
     expect(first.widgets.get("/join")).toBe(
-      "🌍🪐 /join team 👽🌎 · pie1 · peers: none",
+      "/join team 👽🪐🌎 · pie1 · peers: none",
     );
     const updated = await readChannelRegistry("team");
     expect(updated.members.map((member) => member.name)).toEqual(["pie1"]);
@@ -493,7 +493,7 @@ describe("join extension", () => {
     await command(harness, "team");
 
     expect(harness.widgets.get("/join")).toBe(
-      "🌍🪐 /join team 👽🌎 · pie1 · peers: none",
+      "/join team 👽🪐🌎 · pie1 · peers: none",
     );
   });
 
@@ -770,10 +770,10 @@ describe("join extension", () => {
     await command(second, "-rename helper");
 
     expect(first.widgets.get("/join")).toBe(
-      "🌍🪐 /join alpha 👽🌎 · pie1 · peers: helper",
+      "/join alpha 👽🪐🌎 · pie1 · peers: helper",
     );
     expect(second.widgets.get("/join")).toBe(
-      "🌍🪐 /join alpha 👽🌎 · helper · peers: pie1",
+      "/join alpha 👽🪐🌎 · helper · peers: pie1",
     );
     const alphaBeforeSwitch = await readChannelRegistry("alpha");
     const oldSocket = requiredValue(
@@ -784,10 +784,10 @@ describe("join extension", () => {
 
     await command(second, "beta");
     expect(first.widgets.get("/join")).toBe(
-      "🌍🪐 /join alpha 👽🌎 · pie1 · peers: none",
+      "/join alpha 👽🪐🌎 · pie1 · peers: none",
     );
     expect(second.widgets.get("/join")).toBe(
-      "🌍🪐 /join beta 👽🌎 · pie1 · peers: none",
+      "/join beta 👽🪐🌎 · pie1 · peers: none",
     );
     expect(await readChannelRegistry("alpha")).toMatchObject({
       members: [expect.objectContaining({ name: "pie1" })],

@@ -96,7 +96,7 @@ export function createExtension(pi: JoinPi): void {
       .sort()
       .join(", ");
     active.ctx.ui.setWidget(STATUS_KEY, [
-      `🌍🪐 ${prefix} 👽🌎 · ${active.member.name} · peers: ${peerNames || "none"}`,
+      `${prefix} 👽🪐🌎 · ${active.member.name} · peers: ${peerNames || "none"}`,
     ]);
   };
 
