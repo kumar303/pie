@@ -80,7 +80,7 @@ export function createExtension(pi: JoinPi): void {
         | { from?: string; text?: string }
         | undefined;
       const from = details?.from ?? "peer";
-      const heading = theme.fg("accent", `[join message from peer "${from}"]`);
+      const heading = theme.fg("muted", `👽 message from "${from}"`);
       if (!expanded) return new Text(heading, 0, 0);
       const text = stripTerminalSequences(details?.text ?? "");
       return new Text(`${heading}\n\n${theme.fg("muted", text)}`, 0, 0);

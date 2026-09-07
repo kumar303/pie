@@ -369,7 +369,7 @@ describe("join extension", () => {
       } as Parameters<MessageRenderer>[2],
     );
     expect(component.render(100).map((line) => line.trimEnd())).toEqual([
-      '[join message from peer "pie1"]',
+      '👽 message from "pie1"',
     ]);
     const expanded = renderer(
       renderedMessage,
