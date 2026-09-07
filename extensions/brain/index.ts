@@ -7,7 +7,10 @@
  * instant status updates.
  */
 
-import { spawnSync as realSpawnSync } from "node:child_process";
+import {
+  spawnSync as realSpawnSync,
+  type SpawnSyncOptionsWithStringEncoding,
+} from "node:child_process";
 import { resolve } from "node:path";
 import type {
   ExtensionAPI,
@@ -203,8 +206,7 @@ export function createExtension(
               publishMessage({ type: "sessions_changed" });
             }
 
-            // Open in $EDITOR
-            openInEditor(dir.dir, ctx, spawnSync);
+            openDirectory(dir.dir, ctx, spawnSync);
           },
           data,
           {
@@ -250,7 +252,84 @@ export function createExtension(
   });
 }
 
-// ── Editor opening ────────────────────────────────────────────────
+// ── Directory opening ─────────────────────────────────────────────
+
+function openDirectory(
+  dir: string,
+  ctx: ExtensionContext,
+  spawnSync: typeof realSpawnSync,
+): void {
+  if (process.env.BRAIN_HERDR === "1") {
+    openInHerdr(dir, ctx, spawnSync);
+    return;
+  }
+  openInEditor(dir, ctx, spawnSync);
+}
+
+function openInHerdr(
+  dir: string,
+  ctx: ExtensionContext,
+  spawnSync: typeof realSpawnSync,
+): void {
+  const absolutePath = resolve(dir);
+  const spawnOptions: SpawnSyncOptionsWithStringEncoding = {
+    cwd: process.cwd(),
+    stdio: ["pipe", "pipe", "pipe"],
+    encoding: "utf-8",
+    timeout: 10000,
+  };
+
+  try {
+    if (process.env.HERDR_ENV !== "1") {
+      throw new Error("Herdr mode requires HERDR_ENV=1");
+    }
+
+    const snapshotResult = spawnSync(
+      "herdr",
+      ["api", "snapshot"],
+      spawnOptions,
+    );
+    throwForSpawnFailure(snapshotResult, "read Herdr workspaces");
+
+    const response = JSON.parse(String(snapshotResult.stdout));
+    const panes = response?.result?.snapshot?.panes;
+    if (!Array.isArray(panes)) {
+      throw new Error("Herdr snapshot did not include panes");
+    }
+
+    const existingPane = panes.find(
+      (pane: unknown) =>
+        isHerdrPane(pane) && resolve(pane.cwd) === absolutePath,
+    );
+    const args = existingPane
+      ? ["workspace", "focus", existingPane.workspace_id]
+      : ["workspace", "create", "--cwd", absolutePath, "--focus"];
+    const openResult = spawnSync("herdr", args, spawnOptions);
+    throwForSpawnFailure(openResult, "open Herdr workspace");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ctx.ui.notify(`Failed to open ${dir}: ${message}`, "error");
+  }
+}
+
+function isHerdrPane(
+  value: unknown,
+): value is { cwd: string; workspace_id: string } {
+  if (!value || typeof value !== "object") return false;
+  const pane = value as Record<string, unknown>;
+  return typeof pane.cwd === "string" && typeof pane.workspace_id === "string";
+}
+
+function throwForSpawnFailure(
+  result: ReturnType<typeof realSpawnSync>,
+  action: string,
+): void {
+  if (result.error) throw result.error;
+  if (result.status !== null && result.status !== 0) {
+    const detail = String(result.stderr || result.stdout || "").trim();
+    throw new Error(`${action} failed: ${detail || `exit ${result.status}`}`);
+  }
+}
 
 function openInEditor(
   dir: string,

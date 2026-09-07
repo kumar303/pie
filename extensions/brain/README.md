@@ -10,6 +10,7 @@ If any are still waiting for `pi` results, it shows a spinner.
 My `$EDITOR` is set to `code` (VS Code) and I always run `pi` in an integrated terminal.
 I'm pretty sure `/brain` will only work for you if you have a similar setup.
 It switches projects by invoking `$BRAIN_EDITOR` on the directory when set, otherwise falling back to `$EDITOR`.
+Set `$BRAIN_HERDR` to `1` for use inside [`herdr`](https://herdr.dev/). This mode will focus the directory's workspace or create one.
 
 ```
  ▶ pie [main]

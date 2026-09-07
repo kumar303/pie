@@ -297,11 +297,16 @@ interface SpawnRecord {
 function makeSpawnReturn(opts?: {
   status?: number | null;
   error?: Error;
+  stdout?: string;
   stderr?: string;
 }): ReturnType<SpawnSyncFn> {
   // `Buffer.alloc` returns `NonSharedBuffer`, which is what spawnSync's
   // most general overload promises in its return type.
-  const stdout = Buffer.alloc(0);
+  const stdoutBytes = opts?.stdout
+    ? Buffer.from(opts.stdout, "utf-8")
+    : Buffer.alloc(0);
+  const stdout = Buffer.alloc(stdoutBytes.length);
+  stdoutBytes.copy(stdout);
   const stderrBytes = opts?.stderr
     ? Buffer.from(opts.stderr, "utf-8")
     : Buffer.alloc(0);
@@ -344,6 +349,8 @@ let tmpDir: string;
 let originalBrainDir: string | undefined;
 let originalEditor: string | undefined;
 let originalBrainEditor: string | undefined;
+let originalBrainHerdr: string | undefined;
+let originalHerdrEnv: string | undefined;
 
 function setEnv(dir: string) {
   process.env.PI_BRAIN_DIR = dir;
@@ -359,6 +366,10 @@ beforeEach(() => {
   originalBrainDir = process.env.PI_BRAIN_DIR;
   originalEditor = process.env.EDITOR;
   originalBrainEditor = process.env.BRAIN_EDITOR;
+  originalBrainHerdr = process.env.BRAIN_HERDR;
+  originalHerdrEnv = process.env.HERDR_ENV;
+  delete process.env.BRAIN_HERDR;
+  delete process.env.HERDR_ENV;
   tmpDir = mkBrainDir();
   setEnv(tmpDir);
 });
@@ -370,6 +381,10 @@ afterEach(() => {
   else process.env.EDITOR = originalEditor;
   if (originalBrainEditor === undefined) delete process.env.BRAIN_EDITOR;
   else process.env.BRAIN_EDITOR = originalBrainEditor;
+  if (originalBrainHerdr === undefined) delete process.env.BRAIN_HERDR;
+  else process.env.BRAIN_HERDR = originalBrainHerdr;
+  if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
+  else process.env.HERDR_ENV = originalHerdrEnv;
   try {
     rmSync(tmpDir, { recursive: true, force: true });
   } catch {
@@ -1028,6 +1043,79 @@ describe("/brain ENTER opens directory", () => {
     // Either via `/usr/bin/open -a` (mac GUI editor) or directly via $EDITOR.
     // The absolute path of /home/user/alpha must appear in args.
     expect(h.spawn.calls[0].args.join(" ")).toContain("/home/user/alpha");
+  });
+
+  it("reports an error when Herdr mode runs outside Herdr", async () => {
+    process.env.BRAIN_HERDR = "1";
+    const { h, ctx, ui } = await seedAndOpenUi();
+
+    ui.fireInput(ENTER);
+
+    expect(h.spawn.mock).not.toHaveBeenCalled();
+    expect(ctx.ui.notifications).toContainEqual({
+      msg: "Failed to open /home/user/alpha: Herdr mode requires HERDR_ENV=1",
+      level: "error",
+    });
+  });
+
+  it("focuses an existing Herdr workspace for the directory", async () => {
+    process.env.BRAIN_HERDR = "1";
+    process.env.HERDR_ENV = "1";
+    const { h, ui } = await seedAndOpenUi();
+    h.spawn.mock
+      .mockImplementationOnce(() =>
+        makeSpawnReturn({
+          stdout: JSON.stringify({
+            result: {
+              snapshot: {
+                panes: [
+                  { cwd: "/home/user/alpha", workspace_id: "workspace-7" },
+                ],
+              },
+            },
+          }),
+        }),
+      )
+      .mockImplementationOnce(() => makeSpawnReturn());
+
+    ui.fireInput(ENTER);
+
+    expect(h.spawn.mock).toHaveBeenNthCalledWith(
+      1,
+      "herdr",
+      ["api", "snapshot"],
+      expect.objectContaining({ encoding: "utf-8" }),
+    );
+    expect(h.spawn.mock).toHaveBeenNthCalledWith(
+      2,
+      "herdr",
+      ["workspace", "focus", "workspace-7"],
+      expect.any(Object),
+    );
+  });
+
+  it("creates a focused Herdr workspace for a new directory", async () => {
+    process.env.BRAIN_HERDR = "1";
+    process.env.HERDR_ENV = "1";
+    const { h, ui } = await seedAndOpenUi();
+    h.spawn.mock
+      .mockImplementationOnce(() =>
+        makeSpawnReturn({
+          stdout: JSON.stringify({
+            result: { snapshot: { panes: [] } },
+          }),
+        }),
+      )
+      .mockImplementationOnce(() => makeSpawnReturn());
+
+    ui.fireInput(ENTER);
+
+    expect(h.spawn.mock).toHaveBeenNthCalledWith(
+      2,
+      "herdr",
+      ["workspace", "create", "--cwd", "/home/user/alpha", "--focus"],
+      expect.any(Object),
+    );
   });
 
   it("uses BRAIN_EDITOR instead of EDITOR when it is set", async () => {
