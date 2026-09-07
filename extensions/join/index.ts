@@ -79,10 +79,9 @@ export function createExtension(pi: JoinPi): void {
       .map((peer) => peer.name)
       .sort()
       .join(", ");
-    active.ctx.ui.setStatus(
-      STATUS_KEY,
+    active.ctx.ui.setWidget(STATUS_KEY, [
       `${prefix} · ${active.member.name} · peers: ${peerNames || "none"}`,
-    );
+    ]);
   };
 
   const invalidRegistry =
@@ -163,7 +162,7 @@ export function createExtension(pi: JoinPi): void {
       if (!isCode(error, "ENOENT")) notifyError(leaving.ctx, error);
     });
     leaving.peers.clear();
-    if (clearStatus) leaving.ctx.ui.setStatus(STATUS_KEY, undefined);
+    if (clearStatus) leaving.ctx.ui.setWidget(STATUS_KEY, undefined);
     removeProcessHandlers();
   };
 
@@ -372,7 +371,6 @@ export function createExtension(pi: JoinPi): void {
       }
     }
     status();
-    sendJoinInstructions(pi, joined);
   };
 
   const renameActive = async (
@@ -513,6 +511,9 @@ export function createExtension(pi: JoinPi): void {
     label: "Send Join Message",
     description:
       "Send a request, a finished result, or a blocking question to exactly one known join peer by name. Do not use it for acknowledgements, thanks, greetings or progress updates.",
+    promptSnippet:
+      "join_send: send a request, result, or blocking question to one join peer",
+    promptGuidelines: joinProtocol(),
     parameters: Type.Object({
       to: Type.String({ description: "The exact peer name" }),
       text: Type.String({
@@ -550,6 +551,11 @@ export function createExtension(pi: JoinPi): void {
     name: "join_list_peers",
     label: "List Join Peers",
     description: "List the peers currently known to this joined session.",
+    promptSnippet: "join_list_peers: list peers in the current join channel",
+    promptGuidelines: [
+      "Use join_list_peers to find exact join peer names before join_send.",
+      "The join peer with `lastMessagedYou: true` sent the latest incoming message.",
+    ],
     parameters: Type.Object({}),
     async execute() {
       const peers = active
@@ -569,41 +575,18 @@ export default function joinExtension(pi: ExtensionAPI): void {
   createExtension(pi);
 }
 
-function sendJoinInstructions(pi: JoinPi, active: ActiveChannel): void {
-  const channel = visibleChannel(active.channel);
-  const joined = channel
-    ? `You joined channel "${channel}" as "${active.member.name}".`
-    : `You joined as "${active.member.name}".`;
-  pi.sendMessage(
-    {
-      customType: "join-instructions",
-      content: joinProtocol(joined),
-      display: true,
-    },
-    // Joining is not a task: the agent should not start working or greeting peers.
-    { triggerTurn: false },
-  );
-}
-
-function joinProtocol(joined: string): string {
+function joinProtocol(): string[] {
   return [
-    "[Join channel connected]",
-    joined,
-    "This notice is not a task. Do nothing with it until a human or a peer asks you for something.",
-    "",
-    'Peers are other agents, named after their working directory plus a number (for example "website1").',
-    "",
-    "Available tools:",
-    "- join_send({ to, text }): send to exactly one peer by name. Both fields are required.",
-    "- join_list_peers(): list the peers currently known to this session.",
-    "",
-    "Protocol:",
-    "- When a peer asks you for something, do the work first. When it is finished, send the sender exactly one join_send containing the complete result. The sender only learns the result from that message.",
-    "- If you cannot do the work without more information, send the sender exactly one join_send with your question, then stop and wait.",
-    "- Do not acknowledge a message when it arrives. Do not send progress updates, thanks, confirmations, greetings or emoji. A message that needs no action from the recipient must not be sent.",
-    "- When a peer sends you a result you asked for, use it and do not reply.",
-    "- Never send a message to a peer unless a human or a peer asked you to do something that needs it.",
-  ].join("\n");
+    "Joining a channel is not a task. Do nothing with join_send or join_list_peers until a human or a join peer asks you for something.",
+    'Join peers are other agents, named after their working directory plus a number (for example "website1"). Use these names with join_send.',
+    "join_send({ to, text }) sends to exactly one join peer by name. Both fields are required.",
+    "join_list_peers() lists the join peers currently known to this session.",
+    "When a join peer asks you for something, do the work first. When it is finished, send the sender exactly one join_send containing the complete result. The sender only learns the result from that message.",
+    "If you cannot do the work without more information, send the join peer exactly one join_send with your question, then stop and wait.",
+    "Do not acknowledge a join message when it arrives. Do not send progress updates, thanks, confirmations, greetings, or emoji through join_send. A message that needs no action from the recipient must not be sent.",
+    "When a join peer sends you a result you asked for, use it and do not reply through join_send.",
+    "Never send a message through join_send unless a human or a join peer asked you to do something that needs it.",
+  ];
 }
 
 function unknownPeerError(to: string, active: ActiveChannel): string {

@@ -41,7 +41,7 @@ type SendMessageCall = {
   message: Parameters<JoinPi["sendMessage"]>[0];
   options?: Parameters<JoinPi["sendMessage"]>[1];
 };
-type MockUi = Pick<ExtensionUIContext, "notify" | "setStatus">;
+type MockUi = Pick<ExtensionUIContext, "notify" | "setWidget">;
 type MockCtx = Pick<ExtensionCommandContext, "cwd"> & { ui: MockUi };
 
 interface HarnessOptions {
@@ -55,8 +55,8 @@ interface Harness {
   events: Map<string, EventHandler[]>;
   messages: SendMessageCall[];
   ctx: MockCtx;
-  statuses: Map<string, string | undefined>;
-  statusCalls: Array<{ key: string; value: string | undefined }>;
+  widgets: Map<string, string | undefined>;
+  widgetCalls: Array<{ key: string; value: string | undefined }>;
   notifications: Array<{ message: string; level?: string }>;
   shutdown(): Promise<void>;
 }
@@ -136,8 +136,8 @@ function makeHarness({
   const tools = new Map<string, RegisteredTool>();
   const events = new Map<string, EventHandler[]>();
   const messages: Harness["messages"] = [];
-  const statuses = new Map<string, string | undefined>();
-  const statusCalls: Harness["statusCalls"] = [];
+  const widgets = new Map<string, string | undefined>();
+  const widgetCalls: Harness["widgetCalls"] = [];
   const notifications: Harness["notifications"] = [];
 
   const api: JoinPi = {
@@ -160,9 +160,13 @@ function makeHarness({
     },
   };
   const ui: MockUi = {
-    setStatus(key, value) {
-      statuses.set(key, value);
-      statusCalls.push({ key, value });
+    setWidget(key, value) {
+      if (value !== undefined && !Array.isArray(value)) {
+        throw new Error("Test setup failed: join widget must use text lines");
+      }
+      const text = value?.join("\n");
+      widgets.set(key, text);
+      widgetCalls.push({ key, value: text });
     },
     notify(message, level) {
       notifications.push({ message, level });
@@ -177,8 +181,8 @@ function makeHarness({
     events,
     messages,
     ctx,
-    statuses,
-    statusCalls,
+    widgets,
+    widgetCalls,
     notifications,
     async shutdown() {
       for (const handler of events.get("session_shutdown") ?? []) {
@@ -254,14 +258,10 @@ describe("join extension", () => {
     const harness = makeHarness({ cwd: "/tmp/pie" });
     await command(harness, "");
 
-    expect(harness.statuses.get("/join")).toBe("/join · pie1 · peers: none");
+    expect(harness.widgets.get("/join")).toBe("/join · pie1 · peers: none");
     const registryPath = join(home, "channels", "__default__.json");
     const registry = await readChannelRegistry("__default__");
     expect(registry.members[0]?.name).toBe("pie1");
-    expect(harness.messages[0]?.message.content).toContain(
-      'You joined as "pie1".',
-    );
-    expect(harness.messages[0]?.message.content).not.toContain("__default__");
     expect(
       (await stat(home)).mode & 0o777,
       "the storage root must allow owner access only",
@@ -283,29 +283,35 @@ describe("join extension", () => {
   it("refreshes status without another prompt when joining the current channel", async () => {
     const harness = makeHarness();
     await command(harness, "team");
-    const calls = harness.statusCalls.length;
+    const calls = harness.widgetCalls.length;
     const messages = harness.messages.length;
 
     await command(harness, "team");
 
-    expect(harness.statusCalls).toHaveLength(calls + 1);
+    expect(harness.widgetCalls).toHaveLength(calls + 1);
     expect(harness.messages).toHaveLength(messages);
   });
 
-  it("delivers the join protocol without starting a turn", async () => {
+  it("adds the join protocol to the agent prompt without adding a transcript message", async () => {
     const harness = makeHarness();
     await command(harness, "team");
 
-    const instructions = harness.messages.find(
-      (entry) => entry.message.customType === "join-instructions",
+    expect(harness.messages).toEqual([]);
+    const send = harness.tools.get("join_send");
+    expect(send?.promptSnippet).toContain("join_send");
+    expect(send?.promptGuidelines).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("not a task"),
+        expect.stringContaining("working directory plus a number"),
+        expect.stringContaining("Both fields are required"),
+        expect.stringContaining("join_list_peers"),
+        expect.stringContaining("complete result"),
+        expect.stringContaining("only learns the result"),
+        expect.stringContaining("Do not acknowledge"),
+        expect.stringContaining("use it and do not reply"),
+        expect.stringContaining("Never send a message"),
+      ]),
     );
-    expect(instructions).toBeDefined();
-    expect(instructions?.options).toMatchObject({ triggerTurn: false });
-    const content = String(instructions?.message.content);
-    expect(content).toContain("not a task");
-    expect(content).toContain("exactly one join_send");
-    expect(content).toContain("Do not acknowledge");
-    expect(content).not.toContain("always reply");
   });
 
   it("describes the tools in terms of requests, results and questions", () => {
@@ -354,10 +360,8 @@ describe("join extension", () => {
       cwd: "/tmp/pie",
     });
 
-    expect(first.statuses.get("/join")).toBe("/join team · pie1 · peers: pie2");
-    expect(second.statuses.get("/join")).toBe(
-      "/join team · pie2 · peers: pie1",
-    );
+    expect(first.widgets.get("/join")).toBe("/join team · pie1 · peers: pie2");
+    expect(second.widgets.get("/join")).toBe("/join team · pie2 · peers: pie1");
 
     const result = await tool(first, "join_send", {
       to: "pie2",
@@ -410,7 +414,7 @@ describe("join extension", () => {
       text: "hello",
     });
     expect(resultText(result)).toMatch(/^Delivery to "pie2" failed: .+/);
-    expect(first.statuses.get("/join")).toBe("/join team · pie1 · peers: none");
+    expect(first.widgets.get("/join")).toBe("/join team · pie1 · peers: none");
     const updated = await readChannelRegistry("team");
     expect(updated.members.map((member) => member.name)).toEqual(["pie1"]);
   });
@@ -436,7 +440,7 @@ describe("join extension", () => {
 
     await command(harness, "team");
 
-    expect(harness.statuses.get("/join")).toBe(
+    expect(harness.widgets.get("/join")).toBe(
       "/join team · pie1 · peers: none",
     );
   });
@@ -713,10 +717,10 @@ describe("join extension", () => {
     });
     await command(second, "-rename helper");
 
-    expect(first.statuses.get("/join")).toBe(
+    expect(first.widgets.get("/join")).toBe(
       "/join alpha · pie1 · peers: helper",
     );
-    expect(second.statuses.get("/join")).toBe(
+    expect(second.widgets.get("/join")).toBe(
       "/join alpha · helper · peers: pie1",
     );
     const alphaBeforeSwitch = await readChannelRegistry("alpha");
@@ -727,12 +731,8 @@ describe("join extension", () => {
     );
 
     await command(second, "beta");
-    expect(first.statuses.get("/join")).toBe(
-      "/join alpha · pie1 · peers: none",
-    );
-    expect(second.statuses.get("/join")).toBe(
-      "/join beta · pie1 · peers: none",
-    );
+    expect(first.widgets.get("/join")).toBe("/join alpha · pie1 · peers: none");
+    expect(second.widgets.get("/join")).toBe("/join beta · pie1 · peers: none");
     expect(await readChannelRegistry("alpha")).toMatchObject({
       members: [expect.objectContaining({ name: "pie1" })],
     });
@@ -747,7 +747,7 @@ describe("join extension", () => {
     );
 
     await command(second, "-leave");
-    expect(second.statuses.get("/join")).toBeUndefined();
+    expect(second.widgets.get("/join")).toBeUndefined();
     expect(await readChannelRegistry("beta")).toEqual({ members: [] });
     await expect(
       stat(betaSocket),

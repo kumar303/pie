@@ -20,7 +20,7 @@ Type `/join -help` for details.
 
 ### How the agents talk
 
-Joining does not start a turn; the agent gets a short protocol notice and waits for work. Each incoming peer message tells the agent what to do with it: do the work and reply to the sender with exactly one `join_send` containing the result, or ask one question if it is blocked. Acknowledgements, thanks and progress updates are not sent. A `join_send` to an unknown name lists the peers that do exist.
+Joining does not start a turn or add a message to the chat. The tool prompt teaches the agent the protocol. Each incoming peer message tells the agent what to do with it: do the work and reply to the sender with exactly one `join_send` containing the result, or ask one question if it is blocked. Acknowledgements, thanks and progress updates are not sent. A `join_send` to an unknown name lists the peers that do exist.
 
 The [join eval suite](../../evals/join/README.md) measures this behaviour; see its [findings](../../evals/join/FINDINGS.md).
 
