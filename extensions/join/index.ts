@@ -4,6 +4,7 @@ import { chmod, readdir, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { createServer, request, type Server } from "node:http";
 import { Type } from "typebox";
+import { Text } from "@earendil-works/pi-tui";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -23,7 +24,7 @@ import {
 
 export interface JoinPi extends Pick<
   ExtensionAPI,
-  "registerCommand" | "registerTool" | "sendMessage"
+  "registerCommand" | "registerMessageRenderer" | "registerTool" | "sendMessage"
 > {
   on(
     event: "session_shutdown",
@@ -53,6 +54,7 @@ interface MemberHealth {
 }
 
 const DEFAULT_CHANNEL = "__default__";
+const JOIN_MESSAGE_TYPE = "join-message";
 const STATUS_KEY = "/join";
 const REQUEST_TIMEOUT_MS = 1_500;
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -71,6 +73,20 @@ export function createExtension(pi: JoinPi): void {
     ctx.ui.notify(errorMessage(error), "error");
   };
 
+  pi.registerMessageRenderer(
+    JOIN_MESSAGE_TYPE,
+    (message, { expanded }, theme) => {
+      const details = message.details as
+        | { from?: string; text?: string }
+        | undefined;
+      const from = details?.from ?? "peer";
+      const heading = theme.fg("accent", `[join message from peer "${from}"]`);
+      if (!expanded) return new Text(heading, 0, 0);
+      const text = stripTerminalSequences(details?.text ?? "");
+      return new Text(`${heading}\n\n${theme.fg("muted", text)}`, 0, 0);
+    },
+  );
+
   const status = (): void => {
     if (!active) return;
     const channel = visibleChannel(active.channel);
@@ -80,7 +96,7 @@ export function createExtension(pi: JoinPi): void {
       .sort()
       .join(", ");
     active.ctx.ui.setWidget(STATUS_KEY, [
-      `${prefix} · ${active.member.name} · peers: ${peerNames || "none"}`,
+      `🌍🪐 ${prefix} 👽🌎 · ${active.member.name} · peers: ${peerNames || "none"}`,
     ]);
   };
 
@@ -181,10 +197,12 @@ export function createExtension(pi: JoinPi): void {
       ? `[join message from peer "${peer.name}" in channel "${label}"]`
       : `[join message from peer "${peer.name}"]`;
     const guidance = `If this is a request, do the work, then reply to "${peer.name}" with exactly one join_send containing the result. If you need more information to do it, ask "${peer.name}" with exactly one join_send. If this is a result, an answer or an acknowledgement, do not reply.`;
+    const peerText = stripTerminalSequences(text);
     const message = {
-      customType: "join-message",
-      content: `${heading}\n\n${stripTerminalSequences(text)}\n\n[${guidance}]`,
+      customType: JOIN_MESSAGE_TYPE,
+      content: `${heading}\n\n${peerText}\n\n[${guidance}]`,
       display: true,
+      details: { from: peer.name, text: peerText },
     };
     try {
       pi.sendMessage(message, { triggerTurn: true, deliverAs: "steer" });
@@ -553,7 +571,7 @@ export function createExtension(pi: JoinPi): void {
     description: "List the peers currently known to this joined session.",
     promptSnippet: "join_list_peers: list peers in the current join channel",
     promptGuidelines: [
-      "Use join_list_peers to find exact join peer names before join_send.",
+      "Use join_list_peers before join_send when the requested join peer name is unknown, ambiguous, or may be misspelled.",
       "The join peer with `lastMessagedYou: true` sent the latest incoming message.",
     ],
     parameters: Type.Object({}),

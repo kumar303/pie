@@ -21,6 +21,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import type {
+  ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
   ExtensionUIContext,
@@ -37,6 +38,7 @@ type RegisteredTool = Parameters<JoinPi["registerTool"]>[0];
 type ToolResult = Awaited<ReturnType<RegisteredTool["execute"]>>;
 type RegisteredCommand = Parameters<JoinPi["registerCommand"]>[1];
 type EventHandler = Parameters<JoinPi["on"]>[1];
+type MessageRenderer = Parameters<ExtensionAPI["registerMessageRenderer"]>[1];
 type SendMessageCall = {
   message: Parameters<JoinPi["sendMessage"]>[0];
   options?: Parameters<JoinPi["sendMessage"]>[1];
@@ -53,6 +55,7 @@ interface Harness {
   commands: Map<string, RegisteredCommand>;
   tools: Map<string, RegisteredTool>;
   events: Map<string, EventHandler[]>;
+  renderers: Map<string, MessageRenderer>;
   messages: SendMessageCall[];
   ctx: MockCtx;
   widgets: Map<string, string | undefined>;
@@ -135,6 +138,7 @@ function makeHarness({
   const commands = new Map<string, RegisteredCommand>();
   const tools = new Map<string, RegisteredTool>();
   const events = new Map<string, EventHandler[]>();
+  const renderers = new Map<string, MessageRenderer>();
   const messages: Harness["messages"] = [];
   const widgets = new Map<string, string | undefined>();
   const widgetCalls: Harness["widgetCalls"] = [];
@@ -146,6 +150,9 @@ function makeHarness({
     },
     registerTool(tool) {
       tools.set(tool.name, tool);
+    },
+    registerMessageRenderer(customType, renderer) {
+      renderers.set(customType, renderer);
     },
     on(name, handler) {
       const handlers = events.get(name) ?? [];
@@ -179,6 +186,7 @@ function makeHarness({
     commands,
     tools,
     events,
+    renderers,
     messages,
     ctx,
     widgets,
@@ -258,7 +266,9 @@ describe("join extension", () => {
     const harness = makeHarness({ cwd: "/tmp/pie" });
     await command(harness, "");
 
-    expect(harness.widgets.get("/join")).toBe("/join · pie1 · peers: none");
+    expect(harness.widgets.get("/join")).toBe(
+      "🌍🪐 /join 👽🌎 · pie1 · peers: none",
+    );
     const registryPath = join(home, "channels", "__default__.json");
     const registry = await readChannelRegistry("__default__");
     expect(registry.members[0]?.name).toBe("pie1");
@@ -329,13 +339,49 @@ describe("join extension", () => {
 
     await tool(first, "join_send", { to: "pie2", text: "finish task 4" });
 
-    const content = String(second.messages.at(-1)?.message.content);
+    const received = requiredValue(
+      second.messages.at(-1)?.message,
+      "received join message",
+    );
+    const content = String(received.content);
     expect(content).toContain(
       '[join message from peer "pie1" in channel "team"]',
     );
     expect(content).toContain("finish task 4");
     expect(content).toContain('reply to "pie1" with exactly one join_send');
     expect(content).toContain("do not reply");
+    expect(received.details).toEqual({ from: "pie1", text: "finish task 4" });
+
+    const renderer = requiredValue(
+      second.renderers.get("join-message"),
+      "join message renderer",
+    );
+    const renderedMessage = {
+      role: "custom" as const,
+      timestamp: 0,
+      ...received,
+    };
+    const component = renderer(
+      renderedMessage,
+      { expanded: false } as Parameters<MessageRenderer>[1],
+      {
+        fg: (_color: string, text: string) => text,
+      } as Parameters<MessageRenderer>[2],
+    );
+    expect(component.render(100).map((line) => line.trimEnd())).toEqual([
+      '[join message from peer "pie1"]',
+    ]);
+    const expanded = renderer(
+      renderedMessage,
+      { expanded: true } as Parameters<MessageRenderer>[1],
+      {
+        fg: (_color: string, text: string) => text,
+      } as Parameters<MessageRenderer>[2],
+    )
+      .render(100)
+      .join("\n");
+    expect(expanded).toContain("finish task 4");
+    expect(expanded).not.toContain("If this is a request");
   });
 
   it("lists the known peers when a message is addressed to an unknown name", async () => {
@@ -360,8 +406,12 @@ describe("join extension", () => {
       cwd: "/tmp/pie",
     });
 
-    expect(first.widgets.get("/join")).toBe("/join team · pie1 · peers: pie2");
-    expect(second.widgets.get("/join")).toBe("/join team · pie2 · peers: pie1");
+    expect(first.widgets.get("/join")).toBe(
+      "🌍🪐 /join team 👽🌎 · pie1 · peers: pie2",
+    );
+    expect(second.widgets.get("/join")).toBe(
+      "🌍🪐 /join team 👽🌎 · pie2 · peers: pie1",
+    );
 
     const result = await tool(first, "join_send", {
       to: "pie2",
@@ -414,7 +464,9 @@ describe("join extension", () => {
       text: "hello",
     });
     expect(resultText(result)).toMatch(/^Delivery to "pie2" failed: .+/);
-    expect(first.widgets.get("/join")).toBe("/join team · pie1 · peers: none");
+    expect(first.widgets.get("/join")).toBe(
+      "🌍🪐 /join team 👽🌎 · pie1 · peers: none",
+    );
     const updated = await readChannelRegistry("team");
     expect(updated.members.map((member) => member.name)).toEqual(["pie1"]);
   });
@@ -441,7 +493,7 @@ describe("join extension", () => {
     await command(harness, "team");
 
     expect(harness.widgets.get("/join")).toBe(
-      "/join team · pie1 · peers: none",
+      "🌍🪐 /join team 👽🌎 · pie1 · peers: none",
     );
   });
 
@@ -718,10 +770,10 @@ describe("join extension", () => {
     await command(second, "-rename helper");
 
     expect(first.widgets.get("/join")).toBe(
-      "/join alpha · pie1 · peers: helper",
+      "🌍🪐 /join alpha 👽🌎 · pie1 · peers: helper",
     );
     expect(second.widgets.get("/join")).toBe(
-      "/join alpha · helper · peers: pie1",
+      "🌍🪐 /join alpha 👽🌎 · helper · peers: pie1",
     );
     const alphaBeforeSwitch = await readChannelRegistry("alpha");
     const oldSocket = requiredValue(
@@ -731,8 +783,12 @@ describe("join extension", () => {
     );
 
     await command(second, "beta");
-    expect(first.widgets.get("/join")).toBe("/join alpha · pie1 · peers: none");
-    expect(second.widgets.get("/join")).toBe("/join beta · pie1 · peers: none");
+    expect(first.widgets.get("/join")).toBe(
+      "🌍🪐 /join alpha 👽🌎 · pie1 · peers: none",
+    );
+    expect(second.widgets.get("/join")).toBe(
+      "🌍🪐 /join beta 👽🌎 · pie1 · peers: none",
+    );
     expect(await readChannelRegistry("alpha")).toMatchObject({
       members: [expect.objectContaining({ name: "pie1" })],
     });

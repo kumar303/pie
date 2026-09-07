@@ -205,15 +205,17 @@ async function runScenario({ prompt, model, thinking, config, logger }) {
         event.type === "extension_ui_request" &&
         event.method === "notify" &&
         event.notifyType === "error";
-      // The join notice may or may not start an agent run. Treat the notice
-      // landing in the session as "joined"; whether the agent then acts on it
-      // is measured by the quiet wait below.
-      const isJoinNotice = (event) =>
-        event.type === "message_end" &&
-        event.message?.customType === "join-instructions";
+      // Older versions emit a join-instructions message. Newer versions keep
+      // the protocol in the tool prompt and emit only the persistent widget.
+      const isJoined = (event) =>
+        (event.type === "message_end" &&
+          event.message?.customType === "join-instructions") ||
+        (event.type === "extension_ui_request" &&
+          event.method === "setWidget" &&
+          event.widgetKey === "/join");
       const outcome = await Promise.race([
         session.waitFor(
-          (event) => isJoinNotice(event) || event.type === "agent_settled",
+          (event) => isJoined(event) || event.type === "agent_settled",
           {
             timeoutMs: config.joinTimeoutMs,
             fromSeq: from,
