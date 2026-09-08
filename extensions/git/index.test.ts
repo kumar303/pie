@@ -56,6 +56,10 @@ const deltaMock = vi.hoisted(() => ({
     | ((command: string) => string | { error: Error & { stderr?: string } }),
 }));
 
+const spawnSyncMock = vi.hoisted(() => ({
+  calls: [] as Array<{ command: string; args: readonly string[] }>,
+}));
+
 vi.mock("node:child_process", async () => {
   const actual =
     await vi.importActual<typeof import("node:child_process")>(
@@ -84,8 +88,35 @@ vi.mock("node:child_process", async () => {
       options,
     );
   }) as typeof actual.execSync;
-  return { ...actual, execSync };
+  const spawnSync = ((command: string, args?: readonly string[]) => {
+    spawnSyncMock.calls.push({ command, args: args ?? [] });
+    return {
+      pid: 1,
+      output: [],
+      stdout: null,
+      stderr: null,
+      status: 0,
+      signal: null,
+    };
+  }) as typeof actual.spawnSync;
+  return { ...actual, execSync, spawnSync };
 });
+
+const originalPieGitEditor = process.env.PIE_GIT_EDITOR;
+const originalEditor = process.env.EDITOR;
+
+function restoreEditorEnvironment(): void {
+  if (originalPieGitEditor === undefined) {
+    delete process.env.PIE_GIT_EDITOR;
+  } else {
+    process.env.PIE_GIT_EDITOR = originalPieGitEditor;
+  }
+  if (originalEditor === undefined) {
+    delete process.env.EDITOR;
+  } else {
+    process.env.EDITOR = originalEditor;
+  }
+}
 
 import { execSync } from "node:child_process";
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from "node:fs";
@@ -417,6 +448,8 @@ beforeEach(() => {
 afterEach(() => {
   process.chdir(origCwd);
   rmSync(tmpDir, { recursive: true, force: true });
+  spawnSyncMock.calls = [];
+  restoreEditorEnvironment();
 });
 
 interface Harness {
@@ -734,6 +767,24 @@ describe("diff viewer ('d' from select-files)", () => {
     for (const line of lines) {
       expect(line).not.toContain("\t");
     }
+  });
+
+  it("uses PIE_GIT_EDITOR instead of EDITOR when 'e' opens a diff file", async () => {
+    writeFileSync(join(tmpDir, "tracked.txt"), "original\n");
+    execSync("git add . && git commit -m init", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "tracked.txt"), "modified\n");
+    process.env.PIE_GIT_EDITOR = "split-vim-pane";
+    process.env.EDITOR = "other-editor";
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("d");
+    ui.fireInput("e");
+
+    expect(spawnSyncMock.calls).toContainEqual({
+      command: "split-vim-pane",
+      args: [join(process.cwd(), "tracked.txt")],
+    });
   });
 });
 

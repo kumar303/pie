@@ -1693,14 +1693,14 @@ export class GitComponent implements Component {
       this.tui.requestRender();
       return;
     }
-    // e = open current diff file in $EDITOR
+    // e = open current diff file in $PIE_GIT_EDITOR or $EDITOR
     if (matchesKey(data, "e")) {
       const file = this.currentDiffFile();
       if (!file) {
         this.ctx.ui.notify("No file at current scroll position", "error");
         return;
       }
-      const editor = process.env.EDITOR || "vi";
+      const editor = process.env.PIE_GIT_EDITOR || process.env.EDITOR || "vi";
       const absolutePath = resolve(this.getRepoRoot(), file);
       try {
         // On macOS, GUI editors like `code` (VS Code) can't connect to the

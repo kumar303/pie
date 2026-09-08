@@ -44,7 +44,10 @@ Quickly page through a diff and tell the agent how dumb it is. Two panes: a diff
 - option: hide tests
 - option: hide files on demand like `package-lock.json`
 - jump to the next / previous file
+- open the current file with `e`
 - full prompt editor with auto-completion and history
+
+Set `PIE_GIT_EDITOR` to override `EDITOR` for the `e` action. The extension invokes the configured command with the current file's absolute path.
 
 ### Recommended: install delta
 
