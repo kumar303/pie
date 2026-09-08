@@ -653,6 +653,42 @@ describe("confirm-branch-check phase", () => {
     expect(ui.renderText()).toContain("g top");
   });
 
+  it("shows selected commit line totals and changed files in a right panel", async () => {
+    writeFileSync(join(tmpDir, "a.txt"), "old one\nold two\n");
+    writeFileSync(join(tmpDir, "b.txt"), "keep\n");
+    execSync("git add . && git commit -m first", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "a.txt"), "old one\nnew two\n");
+    writeFileSync(join(tmpDir, "b.txt"), "keep\nnew one\nnew two\n");
+    execSync("git add . && git commit -m second", { cwd: tmpDir });
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("l");
+    const text = ui.renderText(120);
+
+    expect(text).toContain("Commit changes");
+    expect(text).toContain("+3");
+    expect(text).toContain("-1");
+    expect(text).toContain("a.txt");
+    expect(text).toContain("b.txt");
+
+    ui.fireInput(DOWN);
+    expect(ui.renderText(120)).toContain("-0");
+  });
+
+  it("truncates the changed-file panel when the selected commit has many files", async () => {
+    for (let i = 0; i < 20; i++) {
+      writeFileSync(join(tmpDir, `file-${i}.txt`), `${i}\n`);
+    }
+    execSync("git add . && git commit -m many-files", { cwd: tmpDir });
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("l");
+
+    expect(ui.renderText(120)).toContain("[more files...]");
+  });
+
   it("moves the log cursor by half-pages with d/u and returns to the top with g", async () => {
     for (let i = 0; i < 15; i++) {
       execSync(`git commit --allow-empty -m 'entry ${i}'`, { cwd: tmpDir });

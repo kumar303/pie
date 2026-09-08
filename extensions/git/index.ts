@@ -159,6 +159,12 @@ interface GitLogEntry {
   subject: string;
 }
 
+interface CommitStats {
+  additions: number;
+  deletions: number;
+  files: string[];
+}
+
 // --- Main Component ---
 
 export class GitComponent implements Component {
@@ -206,6 +212,12 @@ export class GitComponent implements Component {
   private logScrollOffset = 0;
   private logReturnPhase: "select-files" | "confirm-branch-check" =
     "confirm-branch-check";
+  private commitStatsCache = new Map<string, CommitStats>();
+  private selectedCommitStats: CommitStats = {
+    additions: 0,
+    deletions: 0,
+    files: [],
+  };
   private branchFiles: { path: string; status: string }[] = [];
   private branchBaseName = "";
   private branchStatusLoading = false;
@@ -1027,6 +1039,7 @@ export class GitComponent implements Component {
     const next = Math.max(0, Math.min(this.logCursor + delta, max));
     if (next === this.logCursor) return;
     this.logCursor = next;
+    this.loadSelectedCommitStats();
     this.invalidate();
     this.tui.requestRender();
   }
@@ -1512,6 +1525,55 @@ export class GitComponent implements Component {
     });
   }
 
+  private loadSelectedCommitStats(): void {
+    const entry = this.logEntries[this.logCursor];
+    if (!entry) {
+      this.selectedCommitStats = { additions: 0, deletions: 0, files: [] };
+      return;
+    }
+    const cached = this.commitStatsCache.get(entry.hash);
+    if (cached) {
+      this.selectedCommitStats = cached;
+      return;
+    }
+
+    try {
+      const output = execSync(
+        `git show --numstat --format= --no-renames -z ${entry.hash}`,
+        {
+          encoding: "utf-8",
+          timeout: 10000,
+          maxBuffer: 10 * 1024 * 1024,
+          cwd: process.cwd(),
+        },
+      );
+      const stats: CommitStats = { additions: 0, deletions: 0, files: [] };
+      for (const rawRecord of output.split("\0")) {
+        const record = rawRecord.replace(/^\n+/, "");
+        if (!record) continue;
+        const firstTab = record.indexOf("\t");
+        const secondTab = record.indexOf("\t", firstTab + 1);
+        if (firstTab === -1 || secondTab === -1) continue;
+        const additions = Number.parseInt(record.slice(0, firstTab), 10);
+        const deletions = Number.parseInt(
+          record.slice(firstTab + 1, secondTab),
+          10,
+        );
+        if (!Number.isNaN(additions)) stats.additions += additions;
+        if (!Number.isNaN(deletions)) stats.deletions += deletions;
+        stats.files.push(record.slice(secondTab + 1));
+      }
+      this.commitStatsCache.set(entry.hash, stats);
+      this.selectedCommitStats = stats;
+    } catch (err: any) {
+      this.selectedCommitStats = { additions: 0, deletions: 0, files: [] };
+      this.ctx.ui.notify(
+        `Commit stats failed: ${err.stderr?.trim() || err.message}`,
+        "error",
+      );
+    }
+  }
+
   private openLogList(): void {
     try {
       const output = execSync("git log -n 100 --format=%H%x09%h%x09%s", {
@@ -1534,6 +1596,7 @@ export class GitComponent implements Component {
       }
       this.logCursor = 0;
       this.logScrollOffset = 0;
+      this.loadSelectedCommitStats();
       this.logReturnPhase =
         this.phase === "select-files" ? "select-files" : "confirm-branch-check";
       this.phase = "log-list";
@@ -2377,17 +2440,22 @@ export class GitComponent implements Component {
   }
 
   private renderLogList(width: number): string[] {
-    const lines: string[] = [];
-    const maxVisible = Math.min(this.logEntries.length, 20);
+    const rowCount = 20;
+    const panelWidth = Math.min(
+      Math.max(24, Math.floor(width * 0.35)),
+      Math.max(1, width - 21),
+    );
+    const listWidth = Math.max(1, width - panelWidth - 1);
 
     if (this.logCursor < this.logScrollOffset) {
       this.logScrollOffset = this.logCursor;
-    } else if (this.logCursor >= this.logScrollOffset + maxVisible) {
-      this.logScrollOffset = this.logCursor - maxVisible + 1;
+    } else if (this.logCursor >= this.logScrollOffset + rowCount) {
+      this.logScrollOffset = this.logCursor - rowCount + 1;
     }
 
+    const leftLines: string[] = [];
     const end = Math.min(
-      this.logScrollOffset + maxVisible,
+      this.logScrollOffset + rowCount,
       this.logEntries.length,
     );
     for (let i = this.logScrollOffset; i < end; i++) {
@@ -2395,12 +2463,43 @@ export class GitComponent implements Component {
       const selected = i === this.logCursor;
       const pointer = selected ? "▸" : " ";
       const text = `  ${pointer} ${entry.shortHash} ${sanitizeLine(entry.subject)}`;
-      lines.push(
+      leftLines.push(
         truncateToWidth(
           this.theme.fg(selected ? "accent" : "dim", text),
-          width,
+          listWidth,
         ),
       );
+    }
+    while (leftLines.length < rowCount) leftLines.push("");
+
+    const stats = this.selectedCommitStats;
+    const rightLines = [
+      this.theme.fg("accent", this.theme.bold("  Commit changes")),
+      "  " +
+        this.theme.fg("success", `+${stats.additions}`) +
+        " " +
+        this.theme.fg("error", `-${stats.deletions}`),
+      "",
+      this.theme.fg("muted", `  Files changed (${stats.files.length})`),
+    ];
+    const maxFileRows = rowCount - rightLines.length;
+    const shownFileCount =
+      stats.files.length > maxFileRows ? maxFileRows - 1 : stats.files.length;
+    for (const file of stats.files.slice(0, shownFileCount)) {
+      rightLines.push(this.theme.fg("dim", `  ${sanitizeLine(file)}`));
+    }
+    if (shownFileCount < stats.files.length) {
+      rightLines.push(this.theme.fg("dim", "  [more files...]"));
+    }
+    while (rightLines.length < rowCount) rightLines.push("");
+
+    const lines: string[] = [];
+    for (let i = 0; i < rowCount; i++) {
+      const left = truncateToWidth(leftLines[i], listWidth);
+      const right = truncateToWidth(rightLines[i], panelWidth);
+      const leftPadded =
+        left + " ".repeat(Math.max(0, listWidth - visibleWidth(left)));
+      lines.push(leftPadded + this.theme.fg("dim", "│") + right);
     }
     return lines;
   }

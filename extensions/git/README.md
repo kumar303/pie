@@ -11,7 +11,7 @@ This shows your modified files according to `git status`. You can:
 
 ## Commit log
 
-Press `l` from the modified-file list or the clean-tree prompt to browse the latest 100 commits. Use `↑`/`↓` to select a commit, `d`/`u` to page, `g` to return to the top, and Enter to view that commit's patch. Escape returns from the patch to the log, then returns to the modified-file list or exits `/git` from the clean-tree log.
+Press `l` from the modified-file list or the clean-tree prompt to browse the latest 100 commits. The right panel shows the selected commit's added and removed line totals and changed files. Use `↑`/`↓` to select a commit, `d`/`u` to page, `g` to return to the top, and Enter to view that commit's patch. Escape returns from the patch to the log, then returns to the modified-file list or exits `/git` from the clean-tree log.
 
 ## Diff viewer
 
