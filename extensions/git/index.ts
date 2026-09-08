@@ -150,7 +150,14 @@ type Phase =
   | "result"
   | "diff-viewer"
   | "branch-status"
-  | "confirm-branch-check";
+  | "confirm-branch-check"
+  | "log-list";
+
+interface GitLogEntry {
+  hash: string;
+  shortHash: string;
+  subject: string;
+}
 
 // --- Main Component ---
 
@@ -192,7 +199,13 @@ export class GitComponent implements Component {
   private hideTests = false;
   private hideWhitespace = true;
   private hiddenFiles: Set<string> = new Set();
-  private diffMode: "working" | "branch" = "working";
+  private diffMode: "working" | "branch" | "commit" = "working";
+  private commitDiffHash = "";
+  private logEntries: GitLogEntry[] = [];
+  private logCursor = 0;
+  private logScrollOffset = 0;
+  private logReturnPhase: "select-files" | "confirm-branch-check" =
+    "confirm-branch-check";
   private branchFiles: { path: string; status: string }[] = [];
   private branchBaseName = "";
   private branchStatusLoading = false;
@@ -856,6 +869,8 @@ export class GitComponent implements Component {
       this.handleConfirmBranchCheck(data);
     } else if (this.phase === "branch-status") {
       this.handleBranchStatus(data);
+    } else if (this.phase === "log-list") {
+      this.handleLogList(data);
     }
   }
 
@@ -930,6 +945,11 @@ export class GitComponent implements Component {
       this.generateCommitMessage();
       return;
     }
+    // 'l' to show recent commits
+    if (matchesKey(data, "l")) {
+      this.openLogList();
+      return;
+    }
     // 'd' to show full diff of all changes
     if (matchesKey(data, "d")) {
       this.openDiffViewer();
@@ -955,6 +975,60 @@ export class GitComponent implements Component {
       this.tui.requestRender();
       return;
     }
+    if (matchesKey(data, "l")) {
+      this.openLogList();
+      return;
+    }
+  }
+
+  private handleLogList(data: string): void {
+    if (matchesKey(data, Key.escape)) {
+      if (this.logReturnPhase === "select-files") {
+        this.phase = "select-files";
+        this.invalidate();
+        this.tui.requestRender();
+      } else {
+        this.onDone();
+      }
+      return;
+    }
+    if (matchesKey(data, "q")) {
+      this.onDone();
+      return;
+    }
+    if (matchesKey(data, Key.down)) {
+      this.moveLogCursor(1);
+      return;
+    }
+    if (matchesKey(data, Key.up)) {
+      this.moveLogCursor(-1);
+      return;
+    }
+    if (matchesKey(data, "d")) {
+      this.moveLogCursor(10);
+      return;
+    }
+    if (matchesKey(data, "u")) {
+      this.moveLogCursor(-10);
+      return;
+    }
+    if (matchesKey(data, "g")) {
+      this.moveLogCursor(-this.logCursor);
+      return;
+    }
+    if (matchesKey(data, Key.enter)) {
+      const entry = this.logEntries[this.logCursor];
+      if (entry) this.openCommitDiffViewer(entry.hash);
+    }
+  }
+
+  private moveLogCursor(delta: number): void {
+    const max = Math.max(0, this.logEntries.length - 1);
+    const next = Math.max(0, Math.min(this.logCursor + delta, max));
+    if (next === this.logCursor) return;
+    this.logCursor = next;
+    this.invalidate();
+    this.tui.requestRender();
   }
 
   private handleBranchStatus(data: string): void {
@@ -1297,6 +1371,44 @@ export class GitComponent implements Component {
     };
   }
 
+  /** Generate the patch applied by one commit. */
+  private generateCommitDiff(commit: string): {
+    diff: string;
+    fileIndex: { line: number; name: string }[];
+    chunkIndex: number[];
+  } | null {
+    const wsFlag = this.hideWhitespace ? " -w" : "";
+    const useDelta = isDeltaAvailable();
+    const colorFlag = useDelta ? "" : " --color";
+    try {
+      let output = execSync(
+        `git show${colorFlag}${wsFlag} --format= --patch --no-ext-diff ${commit}`,
+        {
+          encoding: "utf-8",
+          timeout: 10000,
+          maxBuffer: DIFF_MAX_BUFFER,
+          cwd: process.cwd(),
+        },
+      );
+      const fileIndex = buildFileIndex(output);
+      let chunkIndex: number[] = [];
+      if (useDelta) {
+        const delta = pipeThroughDelta(output, { forceAvailable: true });
+        if (delta.error) this.ctx.ui.notify(delta.error, "error");
+        output = delta.text;
+        remapFileIndex(fileIndex, output);
+        chunkIndex = buildChunkIndex(output.split("\n"));
+      }
+      return { diff: output, fileIndex, chunkIndex };
+    } catch (err: any) {
+      this.ctx.ui.notify(
+        `Commit diff failed: ${err.stderr?.trim() || err.message}`,
+        "error",
+      );
+      return null;
+    }
+  }
+
   /** Generate the diff output for the branch (compared to fork point). */
   private generateBranchDiff(): {
     diff: string;
@@ -1400,6 +1512,41 @@ export class GitComponent implements Component {
     });
   }
 
+  private openLogList(): void {
+    try {
+      const output = execSync("git log -n 100 --format=%H%x09%h%x09%s", {
+        encoding: "utf-8",
+        timeout: 10000,
+        maxBuffer: 10 * 1024 * 1024,
+        cwd: process.cwd(),
+      });
+      this.logEntries = output
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const [hash = "", shortHash = "", ...subjectParts] = line.split("\t");
+          return { hash, shortHash, subject: subjectParts.join("\t") };
+        })
+        .filter((entry) => entry.hash && entry.shortHash);
+      if (this.logEntries.length === 0) {
+        this.ctx.ui.notify("No commits to show", "info");
+        return;
+      }
+      this.logCursor = 0;
+      this.logScrollOffset = 0;
+      this.logReturnPhase =
+        this.phase === "select-files" ? "select-files" : "confirm-branch-check";
+      this.phase = "log-list";
+      this.invalidate();
+      this.tui.requestRender();
+    } catch (err: any) {
+      this.ctx.ui.notify(
+        `git log failed: ${err.stderr?.trim() || err.message}`,
+        "error",
+      );
+    }
+  }
+
   /** Cancel any pending async loading (e.g. when user quits). */
   private cancelLoading(): void {
     this.disposed = true;
@@ -1436,6 +1583,20 @@ export class GitComponent implements Component {
     );
   }
 
+  private openCommitDiffViewer(commit: string): void {
+    this.diffMode = "commit";
+    this.commitDiffHash = commit;
+    this.hiddenFiles.clear();
+    const result = this.generateCommitDiff(commit);
+    if (result === null) return;
+    this.showDiff(
+      result.diff,
+      "No patch for this commit",
+      result.fileIndex,
+      result.chunkIndex,
+    );
+  }
+
   /** Re-run the current diff (e.g. after toggling whitespace). */
   private refreshDiffViewer(): void {
     let result: {
@@ -1445,6 +1606,9 @@ export class GitComponent implements Component {
     } | null;
     if (this.diffMode === "branch") {
       result = this.generateBranchDiff();
+      if (result === null) return;
+    } else if (this.diffMode === "commit") {
+      result = this.generateCommitDiff(this.commitDiffHash);
       if (result === null) return;
     } else {
       result = this.generateWorkingDiff();
@@ -1508,6 +1672,10 @@ export class GitComponent implements Component {
         this.tui.requestRender();
       } else if (this.getPromptText().trim()) {
         this.confirmDiscard = true;
+        this.invalidate();
+        this.tui.requestRender();
+      } else if (this.diffMode === "commit") {
+        this.phase = "log-list";
         this.invalidate();
         this.tui.requestRender();
       } else {
@@ -1882,7 +2050,7 @@ export class GitComponent implements Component {
           truncateToWidth(
             theme.fg(
               "dim",
-              "  ↑↓ navigate • tab select • a all • u unselect • d diff • b branch diff • c commit • enter confirm • esc quit",
+              "  ↑↓ navigate • l log • tab select • a all • u unselect • d diff • b branch diff • c commit • enter confirm • esc quit",
             ),
             width,
           ),
@@ -1979,7 +2147,20 @@ export class GitComponent implements Component {
       );
       lines.push("");
       lines.push(theme.fg("dim", "─".repeat(width)));
-      lines.push(theme.fg("dim", "  enter check branch status • esc quit"));
+      lines.push(
+        theme.fg("dim", "  enter check branch status • l log • esc quit"),
+      );
+    } else if (this.phase === "log-list") {
+      lines.push(...this.renderLogList(width));
+      lines.push(theme.fg("dim", "─".repeat(width)));
+      const escapeHint =
+        this.logReturnPhase === "select-files" ? "esc back" : "esc quit";
+      lines.push(
+        theme.fg(
+          "dim",
+          `  ↑↓ navigate • d/u page • g top • enter diff • ${escapeHint}`,
+        ),
+      );
     } else if (this.phase === "branch-status") {
       lines.push(...this.renderBranchStatus(width));
       lines.push(theme.fg("dim", "─".repeat(width)));
@@ -2122,7 +2303,8 @@ export class GitComponent implements Component {
         const chunkHint =
           this.activeDiffChunkIndex.length > 0 ? " · c/C next/prev chunk" : "";
         const helpLeft = `d↓ u↑ · g/G top/bottom · ↑↓ scroll · f/F next/prev file${chunkHint} · e edit · p path · x explain file · X explain diff · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`;
-        legend = `  ${helpLeft}  │  tab prompt · esc quit  ${position}`;
+        const escapeHint = this.diffMode === "commit" ? "esc back" : "esc quit";
+        legend = `  ${helpLeft}  │  tab prompt · ${escapeHint}  ${position}`;
       } else {
         const hints = `enter send · opt+enter follow-up · \\+enter newline · tab complete · ↑↓ history · ^C clear · esc back`;
         legend = `  ${hints}`;
@@ -2190,6 +2372,35 @@ export class GitComponent implements Component {
     while (remaining.length > 0) {
       lines.push(remaining.slice(0, maxWidth));
       remaining = remaining.slice(maxWidth);
+    }
+    return lines;
+  }
+
+  private renderLogList(width: number): string[] {
+    const lines: string[] = [];
+    const maxVisible = Math.min(this.logEntries.length, 20);
+
+    if (this.logCursor < this.logScrollOffset) {
+      this.logScrollOffset = this.logCursor;
+    } else if (this.logCursor >= this.logScrollOffset + maxVisible) {
+      this.logScrollOffset = this.logCursor - maxVisible + 1;
+    }
+
+    const end = Math.min(
+      this.logScrollOffset + maxVisible,
+      this.logEntries.length,
+    );
+    for (let i = this.logScrollOffset; i < end; i++) {
+      const entry = this.logEntries[i];
+      const selected = i === this.logCursor;
+      const pointer = selected ? "▸" : " ";
+      const text = `  ${pointer} ${entry.shortHash} ${sanitizeLine(entry.subject)}`;
+      lines.push(
+        truncateToWidth(
+          this.theme.fg(selected ? "accent" : "dim", text),
+          width,
+        ),
+      );
     }
     return lines;
   }

@@ -9,6 +9,10 @@ This shows your modified files according to `git status`. You can:
 - select some files and stage a `git` command with them
 - press `d` to enter the diff viewer
 
+## Commit log
+
+Press `l` from the modified-file list or the clean-tree prompt to browse the latest 100 commits. Use `↑`/`↓` to select a commit, `d`/`u` to page, `g` to return to the top, and Enter to view that commit's patch. Escape returns from the patch to the log, then returns to the modified-file list or exits `/git` from the clean-tree log.
+
 ## Diff viewer
 
 Quickly page through a diff and tell the agent how dumb it is. Two panes: a diff viewer and a prompt editor.

@@ -597,6 +597,7 @@ describe("confirm-branch-check phase", () => {
     const text = ui.renderText();
     expect(text).toContain("Check branch status");
     expect(text).toContain("enter");
+    expect(text).toContain("l log");
     expect(text).toContain("esc");
   });
 
@@ -630,6 +631,72 @@ describe("confirm-branch-check phase", () => {
     // No prompt was sent — the user just exited.
     expect(h.pi.sentMessages).toEqual([]);
   });
+
+  it("shows recent commits as one-line log entries when 'l' is pressed", async () => {
+    writeFileSync(join(tmpDir, "file.txt"), "one\n");
+    execSync("git add . && git commit -m 'first entry'", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "file.txt"), "two\n");
+    execSync("git add . && git commit -m 'second entry'", { cwd: tmpDir });
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("l");
+
+    const lines = ui.renderText().split("\n");
+    expect(lines.filter((line) => line.includes("second entry"))).toHaveLength(
+      1,
+    );
+    expect(lines.filter((line) => line.includes("first entry"))).toHaveLength(
+      1,
+    );
+    expect(ui.renderText()).toContain("d/u page");
+    expect(ui.renderText()).toContain("g top");
+  });
+
+  it("moves the log cursor by half-pages with d/u and returns to the top with g", async () => {
+    for (let i = 0; i < 15; i++) {
+      execSync(`git commit --allow-empty -m 'entry ${i}'`, { cwd: tmpDir });
+    }
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("l");
+    expect(ui.renderText()).toMatch(/▸ .*entry 14/);
+
+    ui.fireInput("d");
+    expect(ui.renderText()).toMatch(/▸ .*entry 4/);
+    ui.fireInput("u");
+    expect(ui.renderText()).toMatch(/▸ .*entry 14/);
+    ui.fireInput(DOWN);
+    ui.fireInput("g");
+    expect(ui.renderText()).toMatch(/▸ .*entry 14/);
+  });
+
+  it("opens the selected commit patch and Escape returns to the log list", async () => {
+    writeFileSync(join(tmpDir, "file.txt"), "one\n");
+    execSync("git add . && git commit -m first", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "file.txt"), "two\n");
+    execSync("git add . && git commit -m second", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "file.txt"), "three\n");
+    execSync("git add . && git commit -m third", { cwd: tmpDir });
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("l");
+    ui.fireInput(DOWN);
+    ui.fireInput(ENTER);
+
+    const diff = ui.renderText();
+    expect(diff).toContain("-one");
+    expect(diff).toContain("+two");
+    expect(diff).not.toContain("+three");
+
+    ui.fireInput(ESCAPE);
+    expect(ui.hasUi()).toBe(true);
+    expect(ui.renderText()).toMatch(/▸ .*second/);
+    ui.fireInput(ESCAPE);
+    await ui.cmdPromise;
+    expect(ui.hasUi()).toBe(false);
+  });
 });
 
 // ── Select-files phase: navigation and selection ────────────────────
@@ -644,6 +711,20 @@ describe("file selector navigation and selection", () => {
     writeFileSync(join(tmpDir, "a.txt"), "a-mod");
     writeFileSync(join(tmpDir, "b.txt"), "b-mod");
     writeFileSync(join(tmpDir, "c.txt"), "c-mod");
+  });
+
+  it("opens the commit log with 'l' and Escape returns to modified files", async () => {
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    expect(ui.renderText()).toContain("l log");
+
+    ui.fireInput("l");
+    expect(ui.renderText()).toMatch(/▸ .*init/);
+    ui.fireInput(ESCAPE);
+
+    expect(ui.hasUi()).toBe(true);
+    expect(ui.renderText()).toContain("a.txt");
+    expect(ui.renderText()).toContain("l log");
   });
 
   it("DOWN moves the cursor to the next file and re-renders", async () => {
