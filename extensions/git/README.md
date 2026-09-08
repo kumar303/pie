@@ -47,7 +47,7 @@ Quickly page through a diff and tell the agent how dumb it is. Two panes: a diff
 - open the current file with `e`
 - full prompt editor with auto-completion and history
 
-Set `PIE_GIT_EDITOR` to override `EDITOR` for the `e` action. The extension invokes the configured command with the current file's absolute path.
+For example, if `PIE_GIT_EDITOR="nvim --remote"`, pressing `e` invokes `nvim --remote '/absolute/path/to/file'`.
 
 ### Recommended: install delta
 

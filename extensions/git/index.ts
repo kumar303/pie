@@ -37,6 +37,10 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
 // --- History persistence ---
 
 const HISTORY_DIR = join(homedir(), ".pi", "agent");
@@ -1703,40 +1707,13 @@ export class GitComponent implements Component {
       const editor = process.env.PIE_GIT_EDITOR || process.env.EDITOR || "vi";
       const absolutePath = resolve(this.getRepoRoot(), file);
       try {
-        // On macOS, GUI editors like `code` (VS Code) can't connect to the
-        // running instance via their CLI because VSCODE_IPC_HOOK_CLI isn't
-        // available in pi's process environment. Use `open -a` to reliably
-        // open files in GUI editors via macOS Launch Services.
-        // For terminal editors (vim, nano, etc.), fall back to direct spawn.
-        const editorAppMap: Record<string, string> = {
-          code: "Visual Studio Code",
-          "code-insiders": "Visual Studio Code - Insiders",
-          codium: "VSCodium",
-          cursor: "Cursor",
-          zed: "Zed",
-          subl: "Sublime Text",
-          atom: "Atom",
-        };
-        const editorBase = editor.split("/").pop() || editor;
-        const macApp =
-          process.platform === "darwin" ? editorAppMap[editorBase] : undefined;
-
-        let result;
-        if (macApp) {
-          result = spawnSync("/usr/bin/open", ["-a", macApp, absolutePath], {
-            cwd: process.cwd(),
-            stdio: ["pipe", "pipe", "pipe"],
-            encoding: "utf-8",
-            timeout: 10000,
-          });
-        } else {
-          result = spawnSync(editor, [absolutePath], {
-            cwd: process.cwd(),
-            env: process.env,
-            stdio: "inherit",
-            timeout: 10000,
-          });
-        }
+        const command = `${editor} ${shellQuote(absolutePath)}`;
+        const result = spawnSync("/bin/bash", ["-c", command], {
+          cwd: process.cwd(),
+          env: process.env,
+          stdio: "inherit",
+          timeout: 10000,
+        });
         if (result.error) {
           this.ctx.ui.notify(
             `Failed to open ${file}: ${result.error.message}`,

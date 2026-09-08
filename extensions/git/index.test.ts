@@ -769,11 +769,11 @@ describe("diff viewer ('d' from select-files)", () => {
     }
   });
 
-  it("uses PIE_GIT_EDITOR instead of EDITOR when 'e' opens a diff file", async () => {
+  it("uses PIE_GIT_EDITOR as a shell command instead of EDITOR", async () => {
     writeFileSync(join(tmpDir, "tracked.txt"), "original\n");
     execSync("git add . && git commit -m init", { cwd: tmpDir });
     writeFileSync(join(tmpDir, "tracked.txt"), "modified\n");
-    process.env.PIE_GIT_EDITOR = "split-vim-pane";
+    process.env.PIE_GIT_EDITOR = "nvim --server /tmp/pie.sock --remote";
     process.env.EDITOR = "other-editor";
 
     const h = setupExtension();
@@ -781,9 +781,30 @@ describe("diff viewer ('d' from select-files)", () => {
     ui.fireInput("d");
     ui.fireInput("e");
 
+    const absolutePath = join(process.cwd(), "tracked.txt");
     expect(spawnSyncMock.calls).toContainEqual({
-      command: "split-vim-pane",
-      args: [join(process.cwd(), "tracked.txt")],
+      command: "/bin/bash",
+      args: ["-c", `nvim --server /tmp/pie.sock --remote '${absolutePath}'`],
+    });
+  });
+
+  it("shell-quotes diff file paths with spaces and shell metacharacters", async () => {
+    const file = "tracked file; $(touch nope) 'quote'.txt";
+    writeFileSync(join(tmpDir, file), "original\n");
+    execSync("git add . && git commit -m init", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, file), "modified\n");
+    process.env.PIE_GIT_EDITOR = "pie-git-editor --reuse";
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("d");
+    ui.fireInput("e");
+
+    const absolutePath = join(process.cwd(), file);
+    const quotedPath = `'${absolutePath.replaceAll("'", `'"'"'`)}'`;
+    expect(spawnSyncMock.calls).toContainEqual({
+      command: "/bin/bash",
+      args: ["-c", `pie-git-editor --reuse ${quotedPath}`],
     });
   });
 });
