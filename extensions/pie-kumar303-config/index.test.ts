@@ -11,6 +11,10 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import type {
+  ExtensionAPI,
+  ExtensionUIContext,
+} from "@earendil-works/pi-coding-agent";
 import {
   discoverExtensions,
   discoverSkills,
@@ -18,6 +22,7 @@ import {
   getInstallState,
   installExtension,
   installSkill,
+  registerPieConfig,
   removeExtension,
   removeSkill,
   removeSkillFrontmatterRuleFromRenderedMarkdown,
@@ -144,7 +149,7 @@ describe("discoverSkills", () => {
 });
 
 describe("formatChooserLeftLines", () => {
-  it("groups extensions and skills under separate headings", () => {
+  it("groups extensions, skills, and themes under separate headings", () => {
     const lines = formatChooserLeftLines([
       {
         name: "git",
@@ -160,6 +165,13 @@ describe("formatChooserLeftLines", () => {
         checked: true,
         wasInstalled: true,
       },
+      {
+        name: "light-high-contrast-diff.json",
+        path: "/repo/themes/light-high-contrast-diff.json",
+        type: "theme",
+        checked: false,
+        wasInstalled: false,
+      },
     ]);
 
     expect(lines).toEqual([
@@ -167,6 +179,8 @@ describe("formatChooserLeftLines", () => {
       "  ☐ git",
       "Skills",
       "  ☑ test-break-fix",
+      "Themes",
+      "  ☐ light-high-contrast-diff.json",
     ]);
   });
 });
@@ -377,6 +391,82 @@ describe("installSkill/removeSkill", () => {
 
     expect(removeSkill("test-break-fix", skillPath, agentSkillsDir)).toBeNull();
     expect(existsSync(join(agentSkillsDir, "test-break-fix"))).toBe(false);
+  });
+});
+
+describe("/pie-kumar303-config themes", () => {
+  it("shows a Themes section and installs the selected theme symlink", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "pie-config-test-"));
+    const repoExtensionsDir = join(tmpDir, "repo", "extensions");
+    const repoSkillsDir = join(tmpDir, "repo", "skills");
+    const repoThemesDir = join(tmpDir, "repo", "themes");
+    const agentExtensionsDir = join(tmpDir, "agent", "extensions");
+    const agentSkillsDir = join(tmpDir, "agent", "skills");
+    const agentThemesDir = join(tmpDir, "agent", "themes");
+    mkdirSync(join(repoExtensionsDir, "alpha"), { recursive: true });
+    mkdirSync(repoSkillsDir, { recursive: true });
+    mkdirSync(repoThemesDir, { recursive: true });
+    const themeName = "light-high-contrast-diff.json";
+    const themePath = join(repoThemesDir, themeName);
+    writeFileSync(themePath, '{"name":"light-high-contrast-diff"}');
+
+    type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
+    type CustomFactory = Parameters<ExtensionUIContext["custom"]>[0];
+    let command: Command | undefined;
+    let renderedLines: string[] = [];
+    const pi = {
+      registerCommand(_name: string, config: Command) {
+        command = config;
+      },
+    } as unknown as ExtensionAPI;
+
+    registerPieConfig(pi, {
+      repoExtensionsDir,
+      repoSkillsDir,
+      repoThemesDir,
+      agentExtensionsDir,
+      agentSkillsDir,
+      agentThemesDir,
+    });
+
+    const custom = (async (factory: CustomFactory) => {
+      let finish: ((value: unknown) => void) | undefined;
+      const result = new Promise<unknown>((resolve) => {
+        finish = resolve;
+      });
+      const component = await factory(
+        { requestRender() {} } as never,
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        } as never,
+        {} as never,
+        (value: unknown) => finish?.(value),
+      );
+      renderedLines = component.render(100);
+      component.handleInput?.("\u001b[B");
+      component.handleInput?.(" ");
+      component.handleInput?.("\r");
+      return result;
+    }) as ExtensionUIContext["custom"];
+
+    try {
+      await command?.handler("", {
+        ui: {
+          custom,
+          notify() {},
+          confirm: async () => false,
+        },
+        reload: async () => {},
+      } as never);
+
+      expect(renderedLines.some((line) => line.includes("Themes"))).toBe(true);
+      const linkPath = join(agentThemesDir, themeName);
+      expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(linkPath)).toBe(themePath);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

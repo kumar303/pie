@@ -18,7 +18,7 @@ Install pie as a `pi` package from git:
 pi install https://github.com/kumar303/pie
 ```
 
-This clones the repo and loads the config extension. Type `/pie-kumar303-config` to selectively install the other extensions and skills.
+This clones the repo and loads the config extension. Type `/pie-kumar303-config` to selectively install the other extensions, skills, and themes.
 
 Run `pi update` to pull the latest changes.
 
@@ -44,6 +44,12 @@ Run `pi update` to pull the latest changes.
 | ---------------------------------------- | --------------------------------------------------- |
 | [test-break-fix](skills/test-break-fix/) | Break the code, make sure tests fail, fix the code. |
 | [test-writing](skills/test-writing/)     | Write high quality automated tests.                 |
+
+## Themes
+
+| Theme                                                            | Description                                                    |
+| ---------------------------------------------------------------- | -------------------------------------------------------------- |
+| [light-high-contrast-diff](themes/light-high-contrast-diff.json) | Pi's light theme with darker added, removed, and context text. |
 
 ## Evals
 

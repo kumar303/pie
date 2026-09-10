@@ -2,7 +2,7 @@
  * Pie Config Extension
  *
  * Invoke with `/pie-kumar303-config`. Shows a two-panel UI:
- * - Left: checkbox list of extensions and skills from this repo
+ * - Left: checkbox list of extensions, skills, and themes from this repo
  * - Right: README.md/SKILL.md preview for the highlighted item
  *
  * Pressing Enter applies changes: creates symlinks for newly checked
@@ -32,7 +32,7 @@ import {
 
 // ─── Public helpers (exported for tests) ─────────────────────────
 
-export type ResourceType = "extension" | "skill";
+export type ResourceType = "extension" | "skill" | "theme";
 
 export interface ExtensionInfo {
   name: string;
@@ -133,8 +133,37 @@ export function discoverSkills(
   return result.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** Discover Pi theme JSON files in the given directory. */
+export function discoverThemes(
+  themesDir: string,
+  onError: (message: string) => void,
+): ExtensionInfo[] {
+  if (!existsSync(themesDir)) {
+    throw new Error(`Themes directory does not exist: ${themesDir}`);
+  }
+
+  const entries = readdirSync(themesDir, { withFileTypes: true });
+  const result: ExtensionInfo[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+
+    const themePath = join(themesDir, entry.name);
+    let readme: string | undefined;
+    try {
+      readme = `\`\`\`json\n${readFileSync(themePath, "utf-8")}\n\`\`\``;
+    } catch (err: any) {
+      onError(`Failed to read theme ${entry.name}: ${err.message}`);
+    }
+
+    result.push({ name: entry.name, path: themePath, readme });
+  }
+
+  return result.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /**
- * Check if an extension is installed (symlinked) in the agent extensions dir.
+ * Check if a resource is installed (symlinked) in its Pi agent directory.
  * Returns true only if a symlink exists AND points to the given extPath.
  */
 export function getInstallState(
@@ -159,6 +188,7 @@ function installSymlink(
   name: string,
   extPath: string,
   agentExtDir: string,
+  type: "dir" | "file" = "dir",
 ): string | null {
   const linkPath = join(agentExtDir, name);
 
@@ -186,7 +216,7 @@ function installSymlink(
   }
 
   try {
-    symlinkSync(extPath, linkPath, "dir");
+    symlinkSync(extPath, linkPath, type);
     return null;
   } catch (err: any) {
     return `${name}: failed to create symlink: ${err.message}`;
@@ -260,6 +290,22 @@ export function removeSkill(
   return removeSymlink(name, skillPath, agentSkillsDir);
 }
 
+export function installTheme(
+  name: string,
+  themePath: string,
+  agentThemesDir: string,
+): string | null {
+  return installSymlink(name, themePath, agentThemesDir, "file");
+}
+
+export function removeTheme(
+  name: string,
+  themePath: string,
+  agentThemesDir: string,
+): string | null {
+  return removeSymlink(name, themePath, agentThemesDir);
+}
+
 export function formatChooserLeftLines(
   items: ManagedItem[],
   cursor = -1,
@@ -267,11 +313,16 @@ export function formatChooserLeftLines(
 ): string[] {
   const lines: string[] = [];
 
-  for (const type of ["extension", "skill"] satisfies ResourceType[]) {
+  for (const type of ["extension", "skill", "theme"] satisfies ResourceType[]) {
     const group = items.filter((item) => item.type === type);
     if (group.length === 0) continue;
 
-    lines.push(type === "extension" ? "Extensions" : "Skills");
+    const heading = {
+      extension: "Extensions",
+      skill: "Skills",
+      theme: "Themes",
+    }[type];
+    lines.push(heading);
     for (const item of group) {
       const index = items.indexOf(item);
       const checkbox = item.checked ? "☑" : "☐";
@@ -306,6 +357,10 @@ function getRepoSkillsDir(): string {
   return resolve(getRepoExtensionsDir(), "..", "skills");
 }
 
+function getRepoThemesDir(): string {
+  return resolve(getRepoExtensionsDir(), "..", "themes");
+}
+
 function getAgentExtensionsDir(): string {
   return join(homedir(), ".pi", "agent", "extensions");
 }
@@ -314,23 +369,51 @@ function getAgentSkillsDir(): string {
   return join(homedir(), ".pi", "agent", "skills");
 }
 
-export default function (pi: ExtensionAPI) {
+function getAgentThemesDir(): string {
+  return join(homedir(), ".pi", "agent", "themes");
+}
+
+export interface PieConfigPaths {
+  repoExtensionsDir: string;
+  repoSkillsDir: string;
+  repoThemesDir: string;
+  agentExtensionsDir: string;
+  agentSkillsDir: string;
+  agentThemesDir: string;
+}
+
+export function registerPieConfig(
+  pi: ExtensionAPI,
+  paths: PieConfigPaths,
+): void {
   pi.registerCommand("pie-kumar303-config", {
-    description: "Manage pie-kumar303 extension symlinks",
+    description: "Manage pie-kumar303 resource symlinks",
     handler: async (_args, ctx) => {
-      const repoExtDir = getRepoExtensionsDir();
-      const repoSkillsDir = getRepoSkillsDir();
-      const agentExtDir = getAgentExtensionsDir();
-      const agentSkillsDir = getAgentSkillsDir();
+      const repoExtDir = paths.repoExtensionsDir;
+      const repoSkillsDir = paths.repoSkillsDir;
+      const repoThemesDir = paths.repoThemesDir;
+      const agentExtDir = paths.agentExtensionsDir;
+      const agentSkillsDir = paths.agentSkillsDir;
+      const agentThemesDir = paths.agentThemesDir;
       const extensions = discoverExtensions(repoExtDir, (err) =>
         ctx.ui.notify(err, "error"),
       );
       const skills = discoverSkills(repoSkillsDir, (err) =>
         ctx.ui.notify(err, "error"),
       );
+      const themes = discoverThemes(repoThemesDir, (err) =>
+        ctx.ui.notify(err, "error"),
+      );
 
-      if (extensions.length === 0 && skills.length === 0) {
-        ctx.ui.notify("No extensions or skills found in this repo.", "info");
+      if (
+        extensions.length === 0 &&
+        skills.length === 0 &&
+        themes.length === 0
+      ) {
+        ctx.ui.notify(
+          "No extensions, skills, or themes found in this repo.",
+          "info",
+        );
         return;
       }
 
@@ -357,6 +440,21 @@ export default function (pi: ExtensionAPI) {
             path: skill.path,
             readme: skill.readme,
             type: "skill" as const,
+            checked: installed,
+            wasInstalled: installed,
+          };
+        }),
+        ...themes.map((theme) => {
+          const installed = getInstallState(
+            theme.name,
+            theme.path,
+            agentThemesDir,
+          );
+          return {
+            name: theme.name,
+            path: theme.path,
+            readme: theme.readme,
+            type: "theme" as const,
             checked: installed,
             wasInstalled: installed,
           };
@@ -399,7 +497,7 @@ export default function (pi: ExtensionAPI) {
                   theme.fg(
                     "accent",
                     theme.bold(
-                      " https://github.com/kumar303/pie - manage extensions & skills",
+                      " https://github.com/kumar303/pie - manage extensions, skills & themes",
                     ),
                   ),
                   width,
@@ -587,22 +685,33 @@ export default function (pi: ExtensionAPI) {
       let removed = 0;
 
       for (const item of items) {
-        const install =
-          item.type === "extension" ? installExtension : installSkill;
-        const remove =
-          item.type === "extension" ? removeExtension : removeSkill;
-        const targetDir =
-          item.type === "extension" ? agentExtDir : agentSkillsDir;
+        const actions = {
+          extension: {
+            install: installExtension,
+            remove: removeExtension,
+            targetDir: agentExtDir,
+          },
+          skill: {
+            install: installSkill,
+            remove: removeSkill,
+            targetDir: agentSkillsDir,
+          },
+          theme: {
+            install: installTheme,
+            remove: removeTheme,
+            targetDir: agentThemesDir,
+          },
+        }[item.type];
 
         if (item.checked && !item.wasInstalled) {
-          const err = install(item.name, item.path, targetDir);
+          const err = actions.install(item.name, item.path, actions.targetDir);
           if (err) {
             errors.push(err);
           } else {
             installed++;
           }
         } else if (!item.checked && item.wasInstalled) {
-          const err = remove(item.name, item.path, targetDir);
+          const err = actions.remove(item.name, item.path, actions.targetDir);
           if (err) {
             errors.push(err);
           } else {
@@ -627,7 +736,7 @@ export default function (pi: ExtensionAPI) {
         if (
           await ctx.ui.confirm(
             "Reload",
-            "Extensions changed. Reload now to activate?",
+            "Resources changed. Reload now to activate?",
           )
         ) {
           await ctx.reload();
@@ -636,6 +745,17 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("No changes.", "info");
       }
     },
+  });
+}
+
+export default function (pi: ExtensionAPI): void {
+  registerPieConfig(pi, {
+    repoExtensionsDir: getRepoExtensionsDir(),
+    repoSkillsDir: getRepoSkillsDir(),
+    repoThemesDir: getRepoThemesDir(),
+    agentExtensionsDir: getAgentExtensionsDir(),
+    agentSkillsDir: getAgentSkillsDir(),
+    agentThemesDir: getAgentThemesDir(),
   });
 }
 
