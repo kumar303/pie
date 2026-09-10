@@ -45,12 +45,6 @@ Run `pi update` to pull the latest changes.
 | [test-break-fix](skills/test-break-fix/) | Break the code, make sure tests fail, fix the code. |
 | [test-writing](skills/test-writing/)     | Write high quality automated tests.                 |
 
-## Themes
-
-| Theme                                                            | Description                                                    |
-| ---------------------------------------------------------------- | -------------------------------------------------------------- |
-| [light-high-contrast-diff](themes/light-high-contrast-diff.json) | Pi's light theme with darker added, removed, and context text. |
-
 ## Evals
 
 Behavioural evals that run real `pi` sessions against real models live in [`evals/`](evals/README.md). They are slow and cost tokens, so they are separate from `pnpm test`.
