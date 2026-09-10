@@ -926,6 +926,115 @@ describe("diff viewer ('d' from select-files)", () => {
   });
 });
 
+describe("branch diff fork-point detection", () => {
+  it("falls back to the merge base when the default branch moved past the fork point", async () => {
+    execSync("git branch -M main", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "file.txt"), "base\n");
+    execSync("git add . && git commit -m base", { cwd: tmpDir });
+
+    execSync("git checkout -b feature", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "file.txt"), "feature\n");
+    execSync("git add . && git commit -m feature", { cwd: tmpDir });
+
+    execSync("git checkout main", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "main.txt"), "main moved\n");
+    execSync("git add . && git commit -m main-moved", { cwd: tmpDir });
+    execSync("git update-ref refs/remotes/origin/main HEAD", { cwd: tmpDir });
+    execSync(
+      "git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main",
+      { cwd: tmpDir },
+    );
+
+    execSync("git checkout feature", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "uncommitted.txt"), "keep file selector open\n");
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("b");
+
+    expect(ui.renderText()).toContain("+feature");
+    expect(
+      ui.ctx.ui.notifications.map((notification) => notification.msg),
+    ).not.toContain(
+      "Could not find fork point — no remote branch found in git log",
+    );
+  });
+
+  it("uses the GitStream parent branch as the merge-base target for a stack", async () => {
+    execSync("git branch -M main", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "base.txt"), "base\n");
+    execSync("git add . && git commit -m base", { cwd: tmpDir });
+
+    execSync("git checkout -b parent", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "parent.txt"), "parent\n");
+    execSync("git add . && git commit -m parent", { cwd: tmpDir });
+    execSync("git checkout -b feature", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "feature.txt"), "feature\n");
+    execSync("git add . && git commit -m feature", { cwd: tmpDir });
+
+    execSync("git checkout main", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "main.txt"), "main\n");
+    execSync("git add . && git commit -m main", { cwd: tmpDir });
+    execSync("git update-ref refs/remotes/origin/main HEAD", { cwd: tmpDir });
+    execSync(
+      "git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main",
+      { cwd: tmpDir },
+    );
+    execSync("git checkout feature", { cwd: tmpDir });
+
+    const commonDir = execSync(
+      "git rev-parse --path-format=absolute --git-common-dir",
+      { cwd: tmpDir, encoding: "utf-8" },
+    ).trim();
+    mkdirSync(join(commonDir, ".gs"), { recursive: true });
+    writeFileSync(
+      join(commonDir, ".gs", "state.json"),
+      JSON.stringify({
+        version: 1,
+        trunks: { main: { remote: "origin", target: "main" } },
+        branches: { feature: { parent: "parent", trunk: "main" } },
+      }),
+    );
+    writeFileSync(join(tmpDir, "uncommitted.txt"), "keep file selector open\n");
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("b");
+
+    expect(ui.renderText()).toContain("feature.txt");
+    expect(ui.renderText()).not.toContain("parent.txt");
+  });
+
+  it("reports the primary and fallback errors when no default branch exists", async () => {
+    writeFileSync(join(tmpDir, "file.txt"), "base\n");
+    execSync("git add . && git commit -m base", { cwd: tmpDir });
+    execSync("git branch -M feature", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "uncommitted.txt"), "keep file selector open\n");
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("b");
+
+    const errors = ui.ctx.ui.notifications
+      .filter((notification) => notification.level === "error")
+      .map((notification) => notification.msg)
+      .join("\n");
+    expect(errors).toContain("Could not determine default branch");
+    expect(errors).toContain(
+      "git symbolic-ref --quiet --short refs/remotes/origin/HEAD",
+    );
+    for (const attempt of [
+      "GitStream .gs/state.json",
+      "git symbolic-ref --quiet --short refs/remotes/origin/HEAD",
+      "git rev-parse --verify --quiet origin/main",
+      "git rev-parse --verify --quiet origin/master",
+      "git rev-parse --verify --quiet main",
+      "git rev-parse --verify --quiet master",
+    ]) {
+      expect(errors).toContain(`${attempt}:`);
+    }
+  });
+});
+
 describe("diff viewer discard-prompt confirmation", () => {
   // Simulate: enter diff viewer, switch to prompt pane, type something,
   // press escape (asks "discard?"), press 'y' (confirm). Afterwards the

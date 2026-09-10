@@ -391,6 +391,104 @@ export class GitComponent implements Component {
     return null;
   }
 
+  private getDefaultBranchForkPoint(): {
+    commit: string;
+    name: string;
+  } | null {
+    const errors: { attempt: string; detail: string }[] = [];
+    const candidates: string[] = [];
+    const recordError = (attempt: string, err: any): void => {
+      errors.push({
+        attempt,
+        detail: err.stderr?.toString().trim() || err.message || String(err),
+      });
+    };
+
+    try {
+      const commonDir = execSync(
+        "git rev-parse --path-format=absolute --git-common-dir",
+        {
+          encoding: "utf-8",
+          timeout: 5000,
+          cwd: process.cwd(),
+        },
+      ).trim();
+      const statePath = join(commonDir, ".gs", "state.json");
+      const state = JSON.parse(readFileSync(statePath, "utf-8"));
+      if (state.version !== 1) {
+        throw new Error(
+          `Unsupported GitStream state version: ${state.version}`,
+        );
+      }
+      const parent = state.branches?.[this.branch]?.parent;
+      if (!parent) {
+        throw new Error(`No GitStream parent recorded for ${this.branch}`);
+      }
+      const trunk = state.trunks?.[parent];
+      candidates.push(
+        trunk?.remote && trunk?.target
+          ? `${trunk.remote}/${trunk.target}`
+          : parent,
+      );
+    } catch (err: any) {
+      recordError("GitStream .gs/state.json", err);
+    }
+
+    try {
+      const originHead = execSync(
+        "git symbolic-ref --quiet --short refs/remotes/origin/HEAD",
+        {
+          encoding: "utf-8",
+          timeout: 5000,
+          cwd: process.cwd(),
+        },
+      ).trim();
+      if (originHead) candidates.push(originHead);
+    } catch (err: any) {
+      recordError(
+        "git symbolic-ref --quiet --short refs/remotes/origin/HEAD",
+        err,
+      );
+    }
+
+    candidates.push("origin/main", "origin/master", "main", "master");
+    for (const candidate of [...new Set(candidates)]) {
+      const attempt = `git rev-parse --verify --quiet ${candidate}`;
+      try {
+        execSync(
+          `git rev-parse --verify --quiet ${shellQuote(`${candidate}^{commit}`)}`,
+          {
+            encoding: "utf-8",
+            timeout: 5000,
+            cwd: process.cwd(),
+            stdio: ["pipe", "pipe", "pipe"],
+          },
+        );
+        const commit = execSync(
+          `git merge-base HEAD ${shellQuote(candidate)}`,
+          {
+            encoding: "utf-8",
+            timeout: 10000,
+            cwd: process.cwd(),
+          },
+        ).trim();
+        if (commit) return { commit, name: candidate };
+        errors.push({ attempt, detail: "git merge-base returned no commit" });
+      } catch (err: any) {
+        recordError(attempt, err);
+      }
+    }
+
+    const errorDetails = errors
+      .map((error) => `${error.attempt}: ${error.detail}`)
+      .join("\n");
+    this.ctx.ui.notify(
+      `Could not determine default branch. Attempts:\n${errorDetails || "No errors were reported."}`,
+      "error",
+    );
+    return null;
+  }
+
   private getForkPoint(): { commit: string; name: string } | null {
     if (this.cachedForkPoint !== undefined) {
       return this.cachedForkPoint;
@@ -405,7 +503,8 @@ export class GitComponent implements Component {
           cwd: process.cwd(),
         },
       );
-      const result = this.parseForkPointFromLog(log);
+      const result =
+        this.parseForkPointFromLog(log) ?? this.getDefaultBranchForkPoint();
       this.cachedForkPoint = result;
       return result;
     } catch (err: any) {
@@ -476,7 +575,9 @@ export class GitComponent implements Component {
           return;
         }
 
-        const result = this.parseForkPointFromLog(stdout);
+        const result =
+          this.parseForkPointFromLog(stdout) ??
+          this.getDefaultBranchForkPoint();
         this.cachedForkPoint = result;
         resolve(result);
       });
