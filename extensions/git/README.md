@@ -49,6 +49,7 @@ Quickly page through a diff and tell the agent how dumb it is. Two panes: a diff
 - option: hide files on demand like `package-lock.json`
 - jump to the next / previous file
 - open the current file with `e`
+- move the gutter cursor with `↑`/`↓`, press `v` to select lines, then press `p` to quote them with file line numbers and diff prefixes
 - full prompt editor with auto-completion and history
 
 For example, if `PIE_GIT_EDITOR="nvim --remote"`, pressing `e` invokes `nvim --remote '/absolute/path/to/file'`.

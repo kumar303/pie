@@ -449,6 +449,7 @@ afterEach(() => {
   process.chdir(origCwd);
   rmSync(tmpDir, { recursive: true, force: true });
   spawnSyncMock.calls = [];
+  deltaMock.handler = undefined;
   restoreEditorEnvironment();
 });
 
@@ -886,6 +887,29 @@ describe("diff viewer ('d' from select-files)", () => {
     }
   });
 
+  it("does not move the cursor above delta's first file indicator", async () => {
+    writeFileSync(join(tmpDir, "tracked.txt"), "original\n");
+    execSync("git add . && git commit -m init", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "tracked.txt"), "modified\n");
+
+    deltaMock.handler = (command) =>
+      command.trimStart() === "which delta"
+        ? "/usr/bin/delta\n"
+        : "\nΔ tracked.txt\n─────────────\n\nmodified\n";
+    vi.resetModules();
+    const { default: freshGitExtension } = await import("./index.js");
+    const pi = makeMockPi();
+    freshGitExtension(pi);
+    const ui = await openGitUi({ pi });
+    ui.fireInput("d");
+    const atFirstFile = ui.renderText();
+
+    ui.fireInput(UP);
+
+    expect(ui.renderText()).toBe(atFirstFile);
+    expect(ui.renderText()).toContain("▶Δ tracked.txt");
+  });
+
   it("uses PIE_GIT_EDITOR as a shell command instead of EDITOR", async () => {
     writeFileSync(join(tmpDir, "tracked.txt"), "original\n");
     execSync("git add . && git commit -m init", { cwd: tmpDir });
@@ -923,6 +947,113 @@ describe("diff viewer ('d' from select-files)", () => {
       command: "/bin/bash",
       args: ["-c", `pie-git-editor --reuse ${quotedPath}`],
     });
+  });
+
+  it("quotes visual lines with their file, line range, and diff prefixes", async () => {
+    mkdirSync(join(tmpDir, "path", "to"), { recursive: true });
+    const file = join(tmpDir, "path", "to", "the-file.js");
+    writeFileSync(file, "const first = 1;\nconst third = 3;\n");
+    execSync("git add . && git commit -m init", { cwd: tmpDir });
+    writeFileSync(
+      file,
+      "const first = 1;\nconst second = 2;\nconst third = 3;\nconst fourth = 4;\n",
+    );
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("d");
+    expect(ui.renderText()).toContain("v select");
+
+    ui.fireInput("v");
+    expect(ui.renderText()).toContain("Visual selection");
+    expect(ui.renderText()).toContain("▌ const first = 1;");
+    for (let index = 0; index < 3; index++) ui.fireInput(DOWN);
+    ui.fireInput("p");
+
+    const text = ui.renderText(160);
+    expect(text).toContain("path/to/the-file.js:1-4");
+    expect(text).toContain(">  const first = 1;");
+    expect(text).toContain("> +const second = 2;");
+    expect(text).toContain(">  const third = 3;");
+    expect(text).toContain("> +const fourth = 4;");
+
+    for (const char of "Change these lines") ui.fireInput(char);
+    ui.fireInput(ENTER);
+    expect(h.pi.sentMessages).toContainEqual({
+      content:
+        "path/to/the-file.js:1-4\n>  const first = 1;\n> +const second = 2;\n>  const third = 3;\n> +const fourth = 4;\n\nChange these lines",
+      options: { deliverAs: "steer" },
+    });
+  });
+
+  it("prefixes removed lines in a visual selection", async () => {
+    writeFileSync(join(tmpDir, "changed.txt"), "old value\n");
+    execSync("git add . && git commit -m init", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "changed.txt"), "new value\n");
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("d");
+    ui.fireInput("v");
+    ui.fireInput(DOWN);
+    ui.fireInput("p");
+
+    const text = ui.renderText(160);
+    expect(text).toContain("changed.txt:1");
+    expect(text).toContain("> -old value");
+    expect(text).toContain("> +new value");
+  });
+
+  it("Escape cancels visual selection without leaving the diff", async () => {
+    writeFileSync(join(tmpDir, ".gitkeep"), "");
+    execSync("git add . && git commit -m init", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "new.txt"), "first\nsecond\n");
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("d");
+    ui.fireInput("v");
+    expect(ui.renderText()).toContain("Visual selection");
+
+    ui.fireInput(ESCAPE);
+
+    expect(ui.hasUi()).toBe(true);
+    expect(ui.renderText()).toContain("new.txt");
+    expect(ui.renderText()).not.toContain("Visual selection");
+    expect(ui.renderText()).toContain("v select");
+  });
+
+  it("moves the diff cursor down the viewport before starting a selection", async () => {
+    writeFileSync(join(tmpDir, ".gitkeep"), "");
+    execSync("git add . && git commit -m init", { cwd: tmpDir });
+    writeFileSync(
+      join(tmpDir, "new.txt"),
+      Array.from({ length: 40 }, (_, index) => `line-${index + 1}`).join("\n"),
+    );
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("d");
+    ui.fireInput("G");
+
+    expect(ui.renderText()).toContain("▶+line-11");
+    ui.fireInput(DOWN);
+    expect(ui.renderText()).toContain("▶+line-12");
+    expect(ui.renderText()).toContain("+line-11");
+
+    for (let index = 0; index < 28; index++) ui.fireInput(DOWN);
+    expect(ui.renderText()).toContain("▶+line-40");
+    const atBottom = ui.renderText();
+    ui.fireInput(DOWN);
+    expect(ui.renderText()).toBe(atBottom);
+
+    ui.fireInput("G");
+    for (let index = 0; index < 5; index++) ui.fireInput(DOWN);
+    ui.fireInput("v");
+    ui.fireInput("p");
+
+    expect(ui.renderText()).toContain("new.txt:16");
+    expect(ui.renderText()).toContain("> +line-16");
   });
 });
 

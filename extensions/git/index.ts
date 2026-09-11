@@ -165,6 +165,13 @@ interface CommitStats {
   files: string[];
 }
 
+interface DiffSourceLine {
+  file: string;
+  line: number;
+  prefix: "+" | "-" | " ";
+  text: string;
+}
+
 // --- Main Component ---
 
 export class GitComponent implements Component {
@@ -194,14 +201,19 @@ export class GitComponent implements Component {
 
   // Diff viewer
   private diffLines: string[] = [];
+  private diffSourceLines: (DiffSourceLine | undefined)[] = [];
   private diffScrollOffset = 0;
+  private diffCursorIndex = 0;
   private diffFileIndex: { line: number; name: string }[] = []; // file boundaries in diff
   private diffChunkIndex: number[] = []; // chunk (hunk) boundaries (delta only)
 
   // Filtered diff (active view, respects hideTests toggle)
   private activeDiffLines: string[] = [];
+  private activeDiffSourceLines: (DiffSourceLine | undefined)[] = [];
   private activeDiffFileIndex: { line: number; name: string }[] = [];
   private activeDiffChunkIndex: number[] = [];
+  private visualSelectionAnchor: number | null = null;
+  private visualSelectionEnd: number | null = null;
   private hideTests = false;
   private hideWhitespace = true;
   private hiddenFiles: Set<string> = new Set();
@@ -1364,8 +1376,10 @@ export class GitComponent implements Component {
       this.diffFileIndex.length === 0
     ) {
       this.activeDiffLines = this.diffLines;
+      this.activeDiffSourceLines = this.diffSourceLines;
       this.activeDiffFileIndex = this.diffFileIndex;
       this.activeDiffChunkIndex = this.diffChunkIndex;
+      this.clearVisualSelection();
       return;
     }
 
@@ -1386,12 +1400,14 @@ export class GitComponent implements Component {
 
     // Include any preamble lines before the first file header
     const filteredLines: string[] = [];
+    const filteredSourceLines: (DiffSourceLine | undefined)[] = [];
     const filteredFileIndex: { line: number; name: string }[] = [];
 
     const firstFileStart =
       sections.length > 0 ? sections[0].startLine : this.diffLines.length;
     for (let i = 0; i < firstFileStart; i++) {
       filteredLines.push(this.diffLines[i]);
+      filteredSourceLines.push(this.diffSourceLines[i]);
     }
 
     const testPattern = /test/i;
@@ -1406,11 +1422,14 @@ export class GitComponent implements Component {
       });
       for (let i = section.startLine; i < section.endLine; i++) {
         filteredLines.push(this.diffLines[i]);
+        filteredSourceLines.push(this.diffSourceLines[i]);
       }
     }
 
     this.activeDiffLines = filteredLines;
+    this.activeDiffSourceLines = filteredSourceLines;
     this.activeDiffFileIndex = filteredFileIndex;
+    this.clearVisualSelection();
 
     this.activeDiffChunkIndex = remapChunkIndex(
       this.diffChunkIndex,
@@ -1429,6 +1448,7 @@ export class GitComponent implements Component {
     emptyMessage: string,
     fileIndex?: { line: number; name: string }[],
     chunkIndex?: number[],
+    sourceLines?: (DiffSourceLine | undefined)[],
   ): void {
     if (!diffOutput.trim()) {
       this.ctx.ui.notify(emptyMessage, "info");
@@ -1436,7 +1456,9 @@ export class GitComponent implements Component {
     }
 
     this.diffLines = diffOutput.split("\n");
+    this.diffSourceLines = sourceLines ?? buildDiffSourceLines(diffOutput);
     this.diffFocusPane = "diff";
+    this.clearVisualSelection();
     this.promptEditor.setText("");
     this.promptEditor.focused = false;
     this.confirmDiscard = false;
@@ -1461,6 +1483,7 @@ export class GitComponent implements Component {
 
     this.recomputeActiveDiff();
     this.diffScrollOffset = initialDiffScrollOffset(this.activeDiffFileIndex);
+    this.diffCursorIndex = this.diffScrollOffset;
     this.phase = "diff-viewer";
     this.invalidate();
     this.tui.requestRender();
@@ -1471,6 +1494,7 @@ export class GitComponent implements Component {
     diff: string;
     fileIndex: { line: number; name: string }[];
     chunkIndex: number[];
+    sourceLines: (DiffSourceLine | undefined)[];
   } {
     const result = generateWorkingDiffOutput({
       hideWhitespace: this.hideWhitespace,
@@ -1482,6 +1506,7 @@ export class GitComponent implements Component {
       diff: result.diff,
       fileIndex: result.fileIndex,
       chunkIndex: result.chunkIndex,
+      sourceLines: result.sourceLines,
     };
   }
 
@@ -1490,6 +1515,7 @@ export class GitComponent implements Component {
     diff: string;
     fileIndex: { line: number; name: string }[];
     chunkIndex: number[];
+    sourceLines: (DiffSourceLine | undefined)[];
   } | null {
     const wsFlag = this.hideWhitespace ? " -w" : "";
     const useDelta = isDeltaAvailable();
@@ -1505,15 +1531,18 @@ export class GitComponent implements Component {
         },
       );
       const fileIndex = buildFileIndex(output);
+      const rawOutput = output;
+      let sourceLines = buildDiffSourceLines(rawOutput);
       let chunkIndex: number[] = [];
       if (useDelta) {
         const delta = pipeThroughDelta(output, { forceAvailable: true });
         if (delta.error) this.ctx.ui.notify(delta.error, "error");
         output = delta.text;
         remapFileIndex(fileIndex, output);
+        sourceLines = mapSourceLinesToTransformed(rawOutput, output);
         chunkIndex = buildChunkIndex(output.split("\n"));
       }
-      return { diff: output, fileIndex, chunkIndex };
+      return { diff: output, fileIndex, chunkIndex, sourceLines };
     } catch (err: any) {
       this.ctx.ui.notify(
         `Commit diff failed: ${err.stderr?.trim() || err.message}`,
@@ -1528,6 +1557,7 @@ export class GitComponent implements Component {
     diff: string;
     fileIndex: { line: number; name: string }[];
     chunkIndex: number[];
+    sourceLines: (DiffSourceLine | undefined)[];
   } | null {
     const forkPoint = this.getForkPoint();
     if (!forkPoint) {
@@ -1552,6 +1582,8 @@ export class GitComponent implements Component {
         },
       );
       const fileIndex = buildFileIndex(output);
+      const rawOutput = output;
+      let sourceLines = buildDiffSourceLines(rawOutput);
       let chunkIndex: number[] = [];
       if (useDelta) {
         const delta = pipeThroughDelta(output, { forceAvailable: true });
@@ -1560,9 +1592,10 @@ export class GitComponent implements Component {
         }
         output = delta.text;
         remapFileIndex(fileIndex, output);
+        sourceLines = mapSourceLinesToTransformed(rawOutput, output);
         chunkIndex = buildChunkIndex(output.split("\n"));
       }
-      return { diff: output, fileIndex, chunkIndex };
+      return { diff: output, fileIndex, chunkIndex, sourceLines };
     } catch (err: any) {
       this.ctx.ui.notify(
         `Branch diff failed: ${err.stderr?.trim() || err.message}`,
@@ -1732,6 +1765,7 @@ export class GitComponent implements Component {
       "No diff to show",
       result.fileIndex,
       result.chunkIndex,
+      result.sourceLines,
     );
   }
 
@@ -1744,6 +1778,7 @@ export class GitComponent implements Component {
       `No diff compared to base branch`,
       result.fileIndex,
       result.chunkIndex,
+      result.sourceLines,
     );
   }
 
@@ -1758,6 +1793,7 @@ export class GitComponent implements Component {
       "No patch for this commit",
       result.fileIndex,
       result.chunkIndex,
+      result.sourceLines,
     );
   }
 
@@ -1767,6 +1803,7 @@ export class GitComponent implements Component {
       diff: string;
       fileIndex: { line: number; name: string }[];
       chunkIndex: number[];
+      sourceLines: (DiffSourceLine | undefined)[];
     } | null;
     if (this.diffMode === "branch") {
       result = this.generateBranchDiff();
@@ -1779,14 +1816,20 @@ export class GitComponent implements Component {
     }
     // Preserve scroll position as much as possible
     const prevScroll = this.diffScrollOffset;
+    const prevCursorRow = this.diffCursorIndex - prevScroll;
     this.showDiff(
       result.diff,
       "No diff to show",
       result.fileIndex,
       result.chunkIndex,
+      result.sourceLines,
     );
     this.diffScrollOffset = Math.min(
       prevScroll,
+      Math.max(0, this.activeDiffLines.length - 1),
+    );
+    this.diffCursorIndex = Math.min(
+      this.diffScrollOffset + prevCursorRow,
       Math.max(0, this.activeDiffLines.length - 1),
     );
     this.invalidate();
@@ -1807,6 +1850,21 @@ export class GitComponent implements Component {
         this.confirmDiscard = false;
         this.invalidate();
         this.tui.requestRender();
+      }
+      return;
+    }
+
+    if (this.visualSelectionAnchor !== null) {
+      if (matchesKey(data, Key.escape)) {
+        this.clearVisualSelection();
+        this.invalidate();
+        this.tui.requestRender();
+      } else if (matchesKey(data, Key.up)) {
+        this.extendVisualSelection(-1);
+      } else if (matchesKey(data, Key.down)) {
+        this.extendVisualSelection(1);
+      } else if (matchesKey(data, "p")) {
+        this.insertVisualSelectionIntoPrompt();
       }
       return;
     }
@@ -1887,65 +1945,47 @@ export class GitComponent implements Component {
   }
 
   private handleDiffPaneInput(data: string): void {
+    // v = select source lines for a prompt
+    if (matchesKey(data, "v")) {
+      this.startVisualSelection();
+      return;
+    }
     // d = scroll down half page
     if (matchesKey(data, "d")) {
-      const maxScroll = Math.max(
-        0,
-        this.activeDiffLines.length - Math.max(5, 30),
-      );
-      this.diffScrollOffset = Math.min(this.diffScrollOffset + 10, maxScroll);
-      this.invalidate();
-      this.tui.requestRender();
+      this.scrollDiffBy(10);
       return;
     }
     // u = scroll up half page
     if (matchesKey(data, "u")) {
-      this.diffScrollOffset = Math.max(0, this.diffScrollOffset - 10);
-      this.invalidate();
-      this.tui.requestRender();
+      this.scrollDiffBy(-10);
       return;
     }
     // g = go to top (first file)
     if (matchesKey(data, "g")) {
-      this.diffScrollOffset = initialDiffScrollOffset(this.activeDiffFileIndex);
-      this.invalidate();
-      this.tui.requestRender();
+      this.jumpDiffTo(initialDiffScrollOffset(this.activeDiffFileIndex));
       return;
     }
     // G = go to bottom (align last line with bottom of pane)
     if (matchesKey(data, Key.shift("g"))) {
       const availableLines = Math.max(5, 30);
-      this.diffScrollOffset = Math.max(
-        0,
-        this.activeDiffLines.length - availableLines,
+      this.jumpDiffTo(
+        Math.max(0, this.activeDiffLines.length - availableLines),
       );
-      this.invalidate();
-      this.tui.requestRender();
       return;
     }
     if (matchesKey(data, Key.down)) {
-      const maxScroll = Math.max(
-        0,
-        this.activeDiffLines.length - Math.max(5, 30),
-      );
-      this.diffScrollOffset = Math.min(this.diffScrollOffset + 1, maxScroll);
-      this.invalidate();
-      this.tui.requestRender();
+      this.moveDiffCursor(1);
       return;
     }
     if (matchesKey(data, Key.up)) {
-      this.diffScrollOffset = Math.max(0, this.diffScrollOffset - 1);
-      this.invalidate();
-      this.tui.requestRender();
+      this.moveDiffCursor(-1);
       return;
     }
     // f = jump to next file
     if (matchesKey(data, "f")) {
       for (const entry of this.activeDiffFileIndex) {
-        if (entry.line > this.diffScrollOffset) {
-          this.diffScrollOffset = entry.line;
-          this.invalidate();
-          this.tui.requestRender();
+        if (entry.line > this.diffCursorIndex) {
+          this.jumpDiffTo(entry.line);
           return;
         }
       }
@@ -1954,10 +1994,8 @@ export class GitComponent implements Component {
     // F = jump to previous file
     if (matchesKey(data, Key.shift("f"))) {
       for (let i = this.activeDiffFileIndex.length - 1; i >= 0; i--) {
-        if (this.activeDiffFileIndex[i].line < this.diffScrollOffset) {
-          this.diffScrollOffset = this.activeDiffFileIndex[i].line;
-          this.invalidate();
-          this.tui.requestRender();
+        if (this.activeDiffFileIndex[i].line < this.diffCursorIndex) {
+          this.jumpDiffTo(this.activeDiffFileIndex[i].line);
           return;
         }
       }
@@ -1966,10 +2004,8 @@ export class GitComponent implements Component {
     // c = jump to next chunk (delta only)
     if (matchesKey(data, "c")) {
       for (const line of this.activeDiffChunkIndex) {
-        if (line > this.diffScrollOffset) {
-          this.diffScrollOffset = line;
-          this.invalidate();
-          this.tui.requestRender();
+        if (line > this.diffCursorIndex) {
+          this.jumpDiffTo(line);
           return;
         }
       }
@@ -1978,10 +2014,8 @@ export class GitComponent implements Component {
     // C = jump to previous chunk (delta only)
     if (matchesKey(data, Key.shift("c"))) {
       for (let i = this.activeDiffChunkIndex.length - 1; i >= 0; i--) {
-        if (this.activeDiffChunkIndex[i] < this.diffScrollOffset) {
-          this.diffScrollOffset = this.activeDiffChunkIndex[i];
-          this.invalidate();
-          this.tui.requestRender();
+        if (this.activeDiffChunkIndex[i] < this.diffCursorIndex) {
+          this.jumpDiffTo(this.activeDiffChunkIndex[i]);
           return;
         }
       }
@@ -1992,6 +2026,7 @@ export class GitComponent implements Component {
       this.hideTests = !this.hideTests;
       this.recomputeActiveDiff();
       this.diffScrollOffset = initialDiffScrollOffset(this.activeDiffFileIndex);
+      this.diffCursorIndex = this.diffScrollOffset;
       this.invalidate();
       this.tui.requestRender();
       return;
@@ -2016,6 +2051,7 @@ export class GitComponent implements Component {
         this.diffScrollOffset,
         Math.max(0, this.activeDiffLines.length - 1),
       );
+      this.diffCursorIndex = this.diffScrollOffset;
       this.invalidate();
       this.tui.requestRender();
       return;
@@ -2025,6 +2061,7 @@ export class GitComponent implements Component {
       if (this.hiddenFiles.size === 0) return;
       this.hiddenFiles.clear();
       this.recomputeActiveDiff();
+      this.diffCursorIndex = this.diffScrollOffset;
       this.invalidate();
       this.tui.requestRender();
       return;
@@ -2092,11 +2129,175 @@ export class GitComponent implements Component {
     }
   }
 
-  /** Get the current file name based on diff scroll position */
+  private jumpDiffTo(index: number): void {
+    const firstLine = initialDiffScrollOffset(this.activeDiffFileIndex);
+    const lastLine = Math.max(firstLine, this.activeDiffLines.length - 1);
+    const availableLines = Math.max(5, 30);
+    const maxScroll = Math.max(
+      firstLine,
+      this.activeDiffLines.length - availableLines,
+    );
+    this.diffCursorIndex = Math.max(firstLine, Math.min(index, lastLine));
+    this.diffScrollOffset = Math.min(this.diffCursorIndex, maxScroll);
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
+  private scrollDiffBy(delta: number): void {
+    const firstLine = initialDiffScrollOffset(this.activeDiffFileIndex);
+    const availableLines = Math.max(5, 30);
+    const maxScroll = Math.max(
+      firstLine,
+      this.activeDiffLines.length - availableLines,
+    );
+    const cursorRow = this.diffCursorIndex - this.diffScrollOffset;
+    const nextScroll = Math.max(
+      firstLine,
+      Math.min(this.diffScrollOffset + delta, maxScroll),
+    );
+    if (nextScroll === this.diffScrollOffset) return;
+    this.diffScrollOffset = nextScroll;
+    this.diffCursorIndex = Math.min(
+      nextScroll + cursorRow,
+      Math.max(0, this.activeDiffLines.length - 1),
+    );
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
+  private moveDiffCursor(direction: -1 | 1): void {
+    const firstLine = initialDiffScrollOffset(this.activeDiffFileIndex);
+    const lastLine = Math.max(firstLine, this.activeDiffLines.length - 1);
+    const next = Math.max(
+      firstLine,
+      Math.min(this.diffCursorIndex + direction, lastLine),
+    );
+    if (next === this.diffCursorIndex) return;
+    this.diffCursorIndex = next;
+    const availableLines = Math.max(5, 30);
+    if (next < this.diffScrollOffset) {
+      this.diffScrollOffset = next;
+    } else if (next >= this.diffScrollOffset + availableLines) {
+      this.diffScrollOffset = next - availableLines + 1;
+    }
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
+  private startVisualSelection(): void {
+    const currentFile = this.currentDiffFile();
+    let lineIndex = this.activeDiffSourceLines.findIndex(
+      (line, index) =>
+        index >= this.diffCursorIndex &&
+        line !== undefined &&
+        (!currentFile || line.file === currentFile),
+    );
+    if (lineIndex === -1) {
+      for (let index = this.diffCursorIndex - 1; index >= 0; index--) {
+        const line = this.activeDiffSourceLines[index];
+        if (line && (!currentFile || line.file === currentFile)) {
+          lineIndex = index;
+          break;
+        }
+      }
+    }
+    if (lineIndex === -1) {
+      this.ctx.ui.notify("No source line at current diff position", "error");
+      return;
+    }
+    this.diffCursorIndex = lineIndex;
+    this.visualSelectionAnchor = lineIndex;
+    this.visualSelectionEnd = lineIndex;
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
+  private clearVisualSelection(): void {
+    this.visualSelectionAnchor = null;
+    this.visualSelectionEnd = null;
+  }
+
+  private extendVisualSelection(direction: -1 | 1): void {
+    if (
+      this.visualSelectionAnchor === null ||
+      this.visualSelectionEnd === null
+    ) {
+      return;
+    }
+    const current = this.activeDiffSourceLines[this.visualSelectionEnd];
+    if (!current) return;
+    for (
+      let index = this.visualSelectionEnd + direction;
+      index >= 0 && index < this.activeDiffSourceLines.length;
+      index += direction
+    ) {
+      const line = this.activeDiffSourceLines[index];
+      if (!line) continue;
+      if (line.file !== current.file) return;
+      this.visualSelectionEnd = index;
+      this.diffCursorIndex = index;
+      const availableLines = Math.max(5, 30);
+      if (index < this.diffScrollOffset) {
+        this.diffScrollOffset = index;
+      } else if (index >= this.diffScrollOffset + availableLines) {
+        this.diffScrollOffset = index - availableLines + 1;
+      }
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
+  }
+
+  private selectedSourceLines(): DiffSourceLine[] {
+    if (
+      this.visualSelectionAnchor === null ||
+      this.visualSelectionEnd === null
+    ) {
+      return [];
+    }
+    const start = Math.min(this.visualSelectionAnchor, this.visualSelectionEnd);
+    const end = Math.max(this.visualSelectionAnchor, this.visualSelectionEnd);
+    return this.activeDiffSourceLines
+      .slice(start, end + 1)
+      .filter((line): line is DiffSourceLine => line !== undefined);
+  }
+
+  private insertVisualSelectionIntoPrompt(): void {
+    const selected = this.selectedSourceLines();
+    if (selected.length === 0) return;
+    const firstLine = Math.min(...selected.map((line) => line.line));
+    const lastLine = Math.max(...selected.map((line) => line.line));
+    const lineRange =
+      firstLine === lastLine ? `${firstLine}` : `${firstLine}-${lastLine}`;
+    const quote = selected
+      .map((line) => `> ${line.prefix}${line.text}`)
+      .join("\n");
+    const sep = this.getPromptText().trim() ? "\n\n" : "";
+    this.clearVisualSelection();
+    this.insertIntoPrompt(
+      `${sep}${selected[0].file}:${lineRange}\n${quote}\n\n`,
+    );
+  }
+
+  private isDiffLineSelected(index: number): boolean {
+    if (
+      this.visualSelectionAnchor === null ||
+      this.visualSelectionEnd === null
+    ) {
+      return false;
+    }
+    return (
+      index >= Math.min(this.visualSelectionAnchor, this.visualSelectionEnd) &&
+      index <= Math.max(this.visualSelectionAnchor, this.visualSelectionEnd) &&
+      this.activeDiffSourceLines[index] !== undefined
+    );
+  }
+
+  /** Get the current file name based on the diff cursor position. */
   private currentDiffFile(): string {
     let name = "";
     for (const entry of this.activeDiffFileIndex) {
-      if (entry.line <= this.diffScrollOffset) {
+      if (entry.line <= this.diffCursorIndex) {
         name = entry.name;
       } else {
         break;
@@ -2360,13 +2561,19 @@ export class GitComponent implements Component {
         this.hiddenFiles.size > 0
           ? theme.fg("warning", ` (files hidden: ${this.hiddenFiles.size})`)
           : "";
+      const visualSelectionLabel =
+        this.visualSelectionAnchor !== null
+          ? theme.fg("accent", " (Visual selection)")
+          : "";
       const diffHeader = diffFocused
         ? theme.fg("accent", theme.bold(" ▶ Diff")) +
+          visualSelectionLabel +
           testsHiddenLabel +
           wsHiddenLabel +
           filesHiddenLabel +
           theme.fg("muted", fileLabel)
         : theme.fg("dim", "   Diff") +
+          visualSelectionLabel +
           testsHiddenLabel +
           wsHiddenLabel +
           filesHiddenLabel +
@@ -2398,9 +2605,14 @@ export class GitComponent implements Component {
       const diffEnd = Math.min(this.diffScrollOffset + availableLines, total);
       const leftLines: string[] = [];
       for (let i = this.diffScrollOffset; i < diffEnd; i++) {
+        const marker = this.isDiffLineSelected(i)
+          ? theme.fg("accent", "▌")
+          : i === this.diffCursorIndex
+            ? theme.fg(diffFocused ? "accent" : "dim", "▶")
+            : " ";
         leftLines.push(
           truncateToWidth(
-            " " + sanitizeLine(this.activeDiffLines[i]),
+            marker + sanitizeLine(this.activeDiffLines[i]),
             diffPaneWidth,
           ),
         );
@@ -2464,11 +2676,18 @@ export class GitComponent implements Component {
           : "h hide file";
       let legend: string;
       if (diffFocused) {
-        const chunkHint =
-          this.activeDiffChunkIndex.length > 0 ? " · c/C next/prev chunk" : "";
-        const helpLeft = `d↓ u↑ · g/G top/bottom · ↑↓ scroll · f/F next/prev file${chunkHint} · e edit · p path · x explain file · X explain diff · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`;
-        const escapeHint = this.diffMode === "commit" ? "esc back" : "esc quit";
-        legend = `  ${helpLeft}  │  tab prompt · ${escapeHint}  ${position}`;
+        if (this.visualSelectionAnchor !== null) {
+          legend = `  Visual selection · ↑↓ extend · p prompt · esc cancel  ${position}`;
+        } else {
+          const chunkHint =
+            this.activeDiffChunkIndex.length > 0
+              ? " · c/C next/prev chunk"
+              : "";
+          const helpLeft = `v select · ↑↓ cursor · d↓ u↑ · g/G top/bottom · f/F next/prev file${chunkHint} · e edit · p prompt · x explain file · X explain diff · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`;
+          const escapeHint =
+            this.diffMode === "commit" ? "esc back" : "esc quit";
+          legend = `  ${helpLeft}  │  tab prompt · ${escapeHint}  ${position}`;
+        }
       } else {
         const hints = `enter send · opt+enter follow-up · \\+enter newline · tab complete · ↑↓ history · ^C clear · esc back`;
         legend = `  ${hints}`;
@@ -2736,6 +2955,142 @@ export class GitComponent implements Component {
   }
 }
 
+// --- Diff source line mapping ---
+
+function stripTerminalStyles(line: string): string {
+  // eslint-disable-next-line no-control-regex
+  return line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
+function buildDiffSourceLines(rawDiff: string): (DiffSourceLine | undefined)[] {
+  const lines = rawDiff.split("\n");
+  const sourceLines: (DiffSourceLine | undefined)[] = new Array(lines.length);
+  let file = "";
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = stripTerminalStyles(lines[index]);
+    const fileMatch = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+    if (fileMatch) {
+      file = fileMatch[2];
+      inHunk = false;
+      continue;
+    }
+
+    const hunkMatch = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (hunkMatch) {
+      oldLine = Number.parseInt(hunkMatch[1], 10);
+      newLine = Number.parseInt(hunkMatch[2], 10);
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk || !file) continue;
+
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      sourceLines[index] = {
+        file,
+        line: newLine,
+        prefix: "+",
+        text: line.slice(1),
+      };
+      newLine++;
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      sourceLines[index] = {
+        file,
+        line: oldLine,
+        prefix: "-",
+        text: line.slice(1),
+      };
+      oldLine++;
+    } else if (line.startsWith(" ")) {
+      sourceLines[index] = {
+        file,
+        line: newLine,
+        prefix: " ",
+        text: line.slice(1),
+      };
+      oldLine++;
+      newLine++;
+    } else if (!line.startsWith("\\")) {
+      inHunk = false;
+    }
+  }
+
+  return sourceLines;
+}
+
+function mapSourceLinesToTransformed(
+  rawDiff: string,
+  transformedDiff: string,
+): (DiffSourceLine | undefined)[] {
+  const rawSourceLines = buildDiffSourceLines(rawDiff).filter(
+    (line): line is DiffSourceLine => line !== undefined,
+  );
+  const transformedLines = transformedDiff.split("\n");
+  const normalized = transformedLines.map((line) =>
+    sanitizeLine(stripTerminalStyles(line)).trimEnd(),
+  );
+  const mapped: (DiffSourceLine | undefined)[] = new Array(
+    transformedLines.length,
+  );
+  let transformedIndex = 0;
+
+  const findLine = (text: string, start: number): number => {
+    const target = sanitizeLine(text).trimEnd();
+    for (let index = start; index < normalized.length; index++) {
+      if (
+        normalized[index] === target ||
+        (target.length > 0 && normalized[index].endsWith(target))
+      ) {
+        return index;
+      }
+    }
+    return -1;
+  };
+
+  for (let index = 0; index < rawSourceLines.length; index++) {
+    const sourceLine = rawSourceLines[index];
+    if (sourceLine.text.trimEnd() !== "") {
+      const match = findLine(sourceLine.text, transformedIndex);
+      if (match !== -1) {
+        mapped[match] = sourceLine;
+        transformedIndex = match + 1;
+      }
+      continue;
+    }
+
+    let runEnd = index;
+    while (
+      runEnd + 1 < rawSourceLines.length &&
+      rawSourceLines[runEnd + 1].text.trimEnd() === ""
+    ) {
+      runEnd++;
+    }
+    const runLength = runEnd - index + 1;
+    const nextSourceLine = rawSourceLines[runEnd + 1];
+    const nextMatch = nextSourceLine
+      ? findLine(nextSourceLine.text, transformedIndex)
+      : normalized.length;
+    const searchEnd = nextMatch === -1 ? normalized.length : nextMatch;
+    const blankMatches: number[] = [];
+    for (let candidate = transformedIndex; candidate < searchEnd; candidate++) {
+      if (normalized[candidate] === "") blankMatches.push(candidate);
+    }
+    const selectedMatches = blankMatches.slice(-runLength);
+    for (let offset = 0; offset < selectedMatches.length; offset++) {
+      mapped[selectedMatches[offset]] = rawSourceLines[index + offset];
+    }
+    if (selectedMatches.length > 0) {
+      transformedIndex = selectedMatches[selectedMatches.length - 1] + 1;
+    }
+    index = runEnd;
+  }
+
+  return mapped;
+}
+
 // --- Delta integration ---
 
 let _deltaAvailable: boolean | undefined;
@@ -2935,6 +3290,7 @@ export function generateWorkingDiffOutput(opts: {
   errors: string[];
   fileIndex: { line: number; name: string }[];
   chunkIndex: number[];
+  sourceLines: (DiffSourceLine | undefined)[];
 } {
   const useDelta = opts.useDelta ?? isDeltaAvailable();
   let diffOutput = "";
@@ -3005,8 +3361,10 @@ export function generateWorkingDiffOutput(opts: {
     }
   }
 
-  // Build file index from the raw diff (before delta transforms the headers)
+  // Build indices from the raw diff before delta transforms the output.
   const fileIndex = buildFileIndex(diffOutput);
+  const rawDiffOutput = diffOutput;
+  let sourceLines = buildDiffSourceLines(rawDiffOutput);
 
   // Pipe the entire diff through delta for syntax highlighting
   let chunkIndex: number[] = [];
@@ -3016,13 +3374,14 @@ export function generateWorkingDiffOutput(opts: {
       errors.push(delta.error);
     }
     diffOutput = delta.text;
+    sourceLines = mapSourceLinesToTransformed(rawDiffOutput, diffOutput);
     // Rebuild line positions: delta changes line count, so find each file
     // name in the delta output. Delta renders file names in its headers.
     remapFileIndex(fileIndex, diffOutput);
     chunkIndex = buildChunkIndex(diffOutput.split("\n"));
   }
 
-  return { diff: diffOutput, errors, fileIndex, chunkIndex };
+  return { diff: diffOutput, errors, fileIndex, chunkIndex, sourceLines };
 }
 
 // --- File path autocomplete provider ---
