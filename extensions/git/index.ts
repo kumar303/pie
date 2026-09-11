@@ -2623,7 +2623,7 @@ export class GitComponent implements Component {
             this.activeDiffChunkIndex.length > 0
               ? " · c/C next/prev chunk"
               : "";
-          const helpLeft = `v select · ↑↓ cursor · d↓ u↑ · g/G top/bottom · f/F next/prev file${chunkHint} · e edit · p prompt · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`;
+          const helpLeft = `v select · d↓ u↑ · g/G top/bottom · f/F next/prev file${chunkHint} · e edit · p prompt · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`;
           const escapeHint =
             this.diffMode === "commit" ? "esc back" : "esc quit";
           legend = `  ${helpLeft}  │  tab prompt · ${escapeHint}  ${position}`;
