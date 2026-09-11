@@ -23,8 +23,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { complete, type UserMessage } from "@earendil-works/pi-ai";
 import {
-  decodeKittyPrintable,
   Editor,
+  Input,
   type EditorTheme,
   Key,
   matchesKey,
@@ -183,8 +183,7 @@ export class GitComponent implements Component {
 
   // Command text input (self-managed)
   private cmdPrefix = ""; // preceding commands (e.g. "git add ... &&\n"), user cannot edit
-  private cmdText = "";
-  private cmdCursor = 0;
+  private commandInput = new Input();
   private commandHistory: string[];
   private historyIndex = -1;
   private savedDraft = "";
@@ -795,7 +794,7 @@ export class GitComponent implements Component {
 
   /** Return the full command string (prefix + user command) with {} expanded. */
   private getFullExpandedCommand(): string {
-    const expandedCmd = this.expandCommand(this.cmdText);
+    const expandedCmd = this.expandCommand(this.commandInput.getValue());
     if (!this.cmdPrefix) return expandedCmd;
     return this.cmdPrefix + expandedCmd;
   }
@@ -839,7 +838,7 @@ export class GitComponent implements Component {
   }
 
   private executeCommand(): void {
-    const template = this.cmdText.trim();
+    const template = this.commandInput.getValue().trim();
     if (!template) return;
 
     const expanded = this.getFullExpandedCommand();
@@ -898,77 +897,15 @@ export class GitComponent implements Component {
     this.tui.requestRender();
   }
 
-  // Map for shift+key → character (symbols produced by shift+number etc.)
-  /**
-   * Extract a printable character from raw input data.
-   * Uses decodeKittyPrintable for Kitty protocol (handles shift+symbols
-   * like `:` correctly), then falls back to raw single-byte printable.
-   */
-  private dataToPrintable(rawData: string): string | undefined {
-    // Kitty protocol: decode shifted characters (e.g. shift+; → :)
-    const kittyChar = decodeKittyPrintable(rawData);
-    if (kittyChar) return kittyChar;
-
-    // Legacy terminal: raw single printable byte
-    if (rawData.length === 1) {
-      const code = rawData.charCodeAt(0);
-      if (code >= 32 && code <= 126) return rawData;
+  private cmdSetValue(value: string, cursorPos = value.length): void {
+    const input = new Input();
+    const position = Math.max(0, Math.min(cursorPos, value.length));
+    if (position > 0) {
+      input.handleInput(`\x1b[200~${value.slice(0, position)}\x1b[201~`);
     }
-
-    return undefined;
-  }
-
-  // --- Command text input helpers ---
-
-  private cmdInsert(ch: string): void {
-    this.cmdText =
-      this.cmdText.slice(0, this.cmdCursor) +
-      ch +
-      this.cmdText.slice(this.cmdCursor);
-    this.cmdCursor += ch.length;
-  }
-
-  private cmdBackspace(): void {
-    if (this.cmdCursor > 0) {
-      this.cmdText =
-        this.cmdText.slice(0, this.cmdCursor - 1) +
-        this.cmdText.slice(this.cmdCursor);
-      this.cmdCursor--;
-    }
-  }
-
-  private cmdDelete(): void {
-    if (this.cmdCursor < this.cmdText.length) {
-      this.cmdText =
-        this.cmdText.slice(0, this.cmdCursor) +
-        this.cmdText.slice(this.cmdCursor + 1);
-    }
-  }
-
-  private cmdSetValue(value: string, cursorPos?: number): void {
-    this.cmdText = value;
-    this.cmdCursor = cursorPos !== undefined ? cursorPos : value.length;
-  }
-
-  /** Find the start of the previous word boundary (for Option+Left / word-backward). */
-  private wordBoundaryLeft(pos: number): number {
-    let i = pos;
-    // Skip whitespace to the left
-    while (i > 0 && /\s/.test(this.cmdText[i - 1])) i--;
-    // Skip word chars to the left
-    while (i > 0 && /\S/.test(this.cmdText[i - 1])) i--;
-    return i;
-  }
-
-  /** Find the end of the next word boundary (for Option+Right / word-forward). */
-  private wordBoundaryRight(pos: number): number {
-    let i = pos;
-    const len = this.cmdText.length;
-    // Skip whitespace to the right
-    while (i < len && /\s/.test(this.cmdText[i])) i++;
-    // Skip word chars to the right
-    while (i < len && /\S/.test(this.cmdText[i])) i++;
-    return i;
+    input.setValue(value);
+    input.focused = true;
+    this.commandInput = input;
   }
 
   // --- Input handling ---
@@ -1199,7 +1136,7 @@ export class GitComponent implements Component {
     if (matchesKey(data, Key.up)) {
       if (this.commandHistory.length === 0) return;
       if (this.historyIndex === -1) {
-        this.savedDraft = this.cmdText;
+        this.savedDraft = this.commandInput.getValue();
         this.historyIndex = this.commandHistory.length - 1;
       } else if (this.historyIndex > 0) {
         this.historyIndex--;
@@ -1225,133 +1162,13 @@ export class GitComponent implements Component {
       return;
     }
 
-    // Alt+Left / Option+Left → word backward
-    if (matchesKey(data, Key.alt("left"))) {
-      this.cmdCursor = this.wordBoundaryLeft(this.cmdCursor);
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-
-    // Alt+Right / Option+Right → word forward
-    if (matchesKey(data, Key.alt("right"))) {
-      this.cmdCursor = this.wordBoundaryRight(this.cmdCursor);
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-
-    // Left arrow
-    if (matchesKey(data, Key.left)) {
-      if (this.cmdCursor > 0) this.cmdCursor--;
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-
-    // Right arrow
-    if (matchesKey(data, Key.right)) {
-      if (this.cmdCursor < this.cmdText.length) this.cmdCursor++;
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-
-    // Home / Cmd+Left
-    if (matchesKey(data, Key.home) || matchesKey(data, Key.ctrl("a"))) {
-      this.cmdCursor = 0;
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-
-    // End / Cmd+Right
-    if (matchesKey(data, Key.end) || matchesKey(data, Key.ctrl("e"))) {
-      this.cmdCursor = this.cmdText.length;
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-
-    // Backspace
-    if (matchesKey(data, Key.backspace)) {
-      this.cmdBackspace();
+    const previousValue = this.commandInput.getValue();
+    this.commandInput.handleInput(data);
+    if (this.commandInput.getValue() !== previousValue) {
       this.historyIndex = -1;
-      this.invalidate();
-      this.tui.requestRender();
-      return;
     }
-
-    // Delete
-    if (matchesKey(data, Key.delete)) {
-      this.cmdDelete();
-      this.historyIndex = -1;
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-
-    // Kill to end of line (Ctrl+K)
-    if (matchesKey(data, Key.ctrl("k"))) {
-      this.cmdText = this.cmdText.slice(0, this.cmdCursor);
-      this.historyIndex = -1;
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-
-    // Kill to start of line (Ctrl+U)
-    if (matchesKey(data, Key.ctrl("u"))) {
-      this.cmdText = this.cmdText.slice(this.cmdCursor);
-      this.cmdCursor = 0;
-      this.historyIndex = -1;
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-
-    // Delete word backward (Alt+Backspace / Alt+Delete / Ctrl+W)
-    if (
-      matchesKey(data, Key.alt("backspace")) ||
-      matchesKey(data, Key.alt("delete")) ||
-      matchesKey(data, Key.ctrl("w"))
-    ) {
-      const newPos = this.wordBoundaryLeft(this.cmdCursor);
-      this.cmdText =
-        this.cmdText.slice(0, newPos) + this.cmdText.slice(this.cmdCursor);
-      this.cmdCursor = newPos;
-      this.historyIndex = -1;
-      this.invalidate();
-      this.tui.requestRender();
-      return;
-    }
-
-    // Bracketed paste: terminal wraps pasted content in \x1b[200~ ... \x1b[201~
-    if (data.includes("\x1b[200~")) {
-      /* eslint-disable no-control-regex */
-      const pasteContent = data
-        .replace(/\x1b\[200~/g, "")
-        .replace(/\x1b\[201~/g, "");
-      /* eslint-enable no-control-regex */
-      if (pasteContent) {
-        // Command input is single-line, strip newlines
-        const cleaned = pasteContent.replace(/\r?\n/g, " ");
-        this.cmdInsert(cleaned);
-        this.historyIndex = -1;
-        this.invalidate();
-        this.tui.requestRender();
-      }
-      return;
-    }
-
-    // Printable character input
-    const ch = this.dataToPrintable(data);
-    if (ch) {
-      this.cmdInsert(ch);
-      this.historyIndex = -1;
-      this.invalidate();
-      this.tui.requestRender();
-    }
+    this.invalidate();
+    this.tui.requestRender();
   }
 
   private handleResult(data: string): void {
@@ -2396,7 +2213,8 @@ export class GitComponent implements Component {
           }
         }
       }
-      lines.push("  " + this.renderCommandInput(width - 4));
+      this.commandInput.focused = true;
+      lines.push("  " + this.commandInput.render(width - 2)[0]);
       lines.push("");
 
       // Preview
@@ -2647,45 +2465,6 @@ export class GitComponent implements Component {
     this.cachedLines = lines;
     this.cachedWidth = width;
     return lines;
-  }
-
-  private renderCommandInput(availableWidth: number): string {
-    const prompt = "> ";
-    const w = availableWidth - prompt.length;
-    if (w <= 0) return prompt;
-
-    const text = this.cmdText;
-    const cur = this.cmdCursor;
-
-    // Determine visible window with horizontal scrolling
-    let visCursor = cur;
-    let visStart = 0;
-
-    if (text.length > w) {
-      const half = Math.floor(w / 2);
-      if (cur < half) {
-        visStart = 0;
-      } else if (cur > text.length - half) {
-        visStart = text.length - w;
-      } else {
-        visStart = cur - half;
-      }
-      visCursor = cur - visStart;
-    }
-
-    const visText = text.slice(visStart, visStart + w);
-    const before = visText.slice(0, visCursor);
-    const atCursor = visCursor < visText.length ? visText[visCursor] : " ";
-    const after =
-      visCursor < visText.length ? visText.slice(visCursor + 1) : "";
-
-    // Inverse video for cursor
-    const cursorChar = `\x1b[7m${atCursor}\x1b[27m`;
-    const padding = " ".repeat(
-      Math.max(0, w - visText.length - (visCursor >= visText.length ? 1 : 0)),
-    );
-
-    return prompt + before + cursorChar + after + padding;
   }
 
   private wrapText(text: string, maxWidth: number): string[] {

@@ -807,6 +807,26 @@ describe("file selector navigation and selection", () => {
   });
 });
 
+describe("commit command input", () => {
+  it("uses Ghostty Option+Left and Option+Right sequences for word movement", async () => {
+    writeFileSync(join(tmpDir, "file.txt"), "original\n");
+    execSync("git add . && git commit -m init", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "file.txt"), "modified\n");
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput(ENTER);
+    for (const char of "commit message ") ui.fireInput(char);
+
+    ui.fireInput("\x1b[98;3:1u");
+    ui.fireInput("X");
+    ui.fireInput("\x1b[102;3:1u");
+    ui.fireInput("Y");
+
+    expect(ui.renderText()).toContain('$ git commit XmessageY "file.txt"');
+  });
+});
+
 describe("'a' (select-all) toggle", () => {
   beforeEach(() => {
     writeFileSync(join(tmpDir, "a.txt"), "a");
