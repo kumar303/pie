@@ -309,16 +309,8 @@ export class GitComponent implements Component {
     raw: string,
     mode: "immediate" | "followUp" = "immediate",
   ): void {
-    let text = raw.trim();
+    const text = raw.trim();
     if (!text) return;
-    if (text.includes("${__current_file_diff__}")) {
-      const file = this.currentDiffFile();
-      const fileDiff = file ? this.getFileDiff(file) : "(no file selected)";
-      text = text.split("${__current_file_diff__}").join(fileDiff);
-    }
-    if (text.includes("${__current_diff__}")) {
-      text = text.split("${__current_diff__}").join(this.getActiveDiffText());
-    }
     if (mode === "followUp") {
       this.queueFollowUp(text);
     } else {
@@ -2110,23 +2102,6 @@ export class GitComponent implements Component {
       this.insertIntoPrompt(sep + file + "\n\n");
       return;
     }
-    // x = explain current file's changes
-    if (matchesKey(data, "x")) {
-      const file = this.currentDiffFile();
-      if (!file) {
-        this.ctx.ui.notify("No file at current scroll position", "error");
-        return;
-      }
-      const sep = this.getPromptText().trim() ? "\n\n" : "";
-      this.insertIntoPrompt(sep + "${__current_file_diff__}\n\n");
-      return;
-    }
-    // X = explain entire visible diff
-    if (matchesKey(data, Key.shift("x"))) {
-      const sep = this.getPromptText().trim() ? "\n\n" : "";
-      this.insertIntoPrompt(sep + "${__current_diff__}\n\n");
-      return;
-    }
   }
 
   private jumpDiffTo(index: number): void {
@@ -2304,41 +2279,6 @@ export class GitComponent implements Component {
       }
     }
     return name;
-  }
-
-  /** Get the diff lines for a specific file from the active (filtered) diff. */
-  private getFileDiff(fileName: string): string {
-    // Find the file's section in the active diff
-    let startLine = -1;
-    let endLine = this.activeDiffLines.length;
-    for (let i = 0; i < this.activeDiffFileIndex.length; i++) {
-      if (this.activeDiffFileIndex[i].name === fileName) {
-        startLine = this.activeDiffFileIndex[i].line;
-        endLine =
-          i + 1 < this.activeDiffFileIndex.length
-            ? this.activeDiffFileIndex[i + 1].line
-            : this.activeDiffLines.length;
-        break;
-      }
-    }
-    if (startLine < 0) return "";
-    return (
-      this.activeDiffLines
-        .slice(startLine, endLine)
-        // eslint-disable-next-line no-control-regex
-        .map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""))
-        .join("\n")
-    );
-  }
-
-  /** Get the entire active (filtered) diff as plain text. */
-  private getActiveDiffText(): string {
-    return (
-      this.activeDiffLines
-        // eslint-disable-next-line no-control-regex
-        .map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""))
-        .join("\n")
-    );
   }
 
   private refreshStatus(): void {
@@ -2683,7 +2623,7 @@ export class GitComponent implements Component {
             this.activeDiffChunkIndex.length > 0
               ? " · c/C next/prev chunk"
               : "";
-          const helpLeft = `v select · ↑↓ cursor · d↓ u↑ · g/G top/bottom · f/F next/prev file${chunkHint} · e edit · p prompt · x explain file · X explain diff · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`;
+          const helpLeft = `v select · ↑↓ cursor · d↓ u↑ · g/G top/bottom · f/F next/prev file${chunkHint} · e edit · p prompt · ${hideTestsHint} · ${hideWsHint} · ${hideFileHint}`;
           const escapeHint =
             this.diffMode === "commit" ? "esc back" : "esc quit";
           legend = `  ${helpLeft}  │  tab prompt · ${escapeHint}  ${position}`;
