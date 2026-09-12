@@ -26,6 +26,7 @@ Run `pi update` to pull the latest changes.
 
 | Extension                                                    | Description                                                                                                                |
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| [bookmark](extensions/bookmark/)                             | Save and browse agent responses per session. Invoke with `/bookmark`.                                                      |
 | [brain](extensions/brain/)                                   | Multi-task ongoing pi sessions. Invoke with `/brain`.                                                                      |
 | [debug-keys](extensions/debug-keys/)                         | Print raw terminal key codes for extension development. Invoke with `/debug-keys`.                                         |
 | [git](extensions/git/)                                       | View git diffs and re-prompt the agent. Invoke with `/git`.                                                                |
