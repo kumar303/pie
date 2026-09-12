@@ -120,7 +120,7 @@ describe("/debug-keys", () => {
 
     pi.runCommand("debug-keys", "", ctx);
 
-    expect(messageText(pi)).toContain("Usage: /debug-keys on|off");
+    expect(messageText(pi)).toContain("Usage: /debug-keys on [count]|off");
     expect(pi.messages[0].message.display).toBe(true);
     expect(pi.messages[0].options).toEqual({ triggerTurn: false });
   });
@@ -150,6 +150,23 @@ describe("/debug-keys", () => {
     expect(ctx.ui.statuses.get("debug-keys")).toBe("/debug-keys on");
   });
 
+  it("turns off after the optional key count", () => {
+    const { pi, ctx } = setup();
+
+    pi.runCommand("debug-keys", "on 2", ctx);
+    ctx.ui.fireTerminalInput("a");
+    ctx.ui.fireTerminalInput("b");
+    ctx.ui.fireTerminalInput("c");
+
+    expect(pi.messages.map((m) => m.message.content)).toEqual([
+      "/debug-keys: debug key logging enabled for 2 keystrokes",
+      '/debug-keys: "a"',
+      '/debug-keys: "b"',
+    ]);
+    expect(ctx.ui.terminalHandlers.size).toBe(0);
+    expect(ctx.ui.statuses.get("debug-keys")).toBeUndefined();
+  });
+
   it("stops printing key codes after /debug-keys off", () => {
     const { pi, ctx } = setup();
 
@@ -171,7 +188,7 @@ describe("/debug-keys", () => {
 
     pi.runCommand("debug-keys", "wat", ctx);
 
-    expect(messageText(pi)).toContain("Usage: /debug-keys on|off");
+    expect(messageText(pi)).toContain("Usage: /debug-keys on [count]|off");
     expect(messageText(pi)).toContain("Unknown debug-keys command: wat");
   });
 });

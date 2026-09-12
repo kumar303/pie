@@ -4,7 +4,7 @@ Print raw terminal key data for debugging Pi extension key handling.
 
 ## Usage
 
-Type `/debug-keys on` and start typing to see JSON-escaped raw key data.
+Type `/debug-keys on` and start typing to see JSON-escaped raw key data. Add a positive count, such as `/debug-keys on 2`, to stop automatically after that many keystrokes.
 
 ## Installation
 

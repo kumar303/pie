@@ -39,11 +39,11 @@ function print(pi: DebugKeysPi, content: string): void {
 function usage(lead?: string): string {
   return [
     lead,
-    "Usage: /debug-keys on|off",
+    "Usage: /debug-keys on [count]|off",
     "",
     "Commands:",
-    "  /debug-keys on   Start printing each raw terminal input sequence received by the extension.",
-    "  /debug-keys off  Stop printing key codes.",
+    "  /debug-keys on [count]  Start printing raw terminal input, then stop after the optional positive key count.",
+    "  /debug-keys off         Stop printing key codes.",
     "",
     "Output includes the JSON-escaped raw data.",
   ]
@@ -66,14 +66,22 @@ export function createExtension(pi: DebugKeysPi): void {
     activeCtx = undefined;
   };
 
-  const start = (ctx: ExtensionCommandContext) => {
+  const start = (ctx: ExtensionCommandContext, count?: number) => {
     if (unsubscribe) stop();
     activeCtx = ctx;
+    let remaining = count;
     unsubscribe = ctx.ui.onTerminalInput((data) => {
       print(pi, formatKeyData(data));
+      if (remaining !== undefined) {
+        remaining -= 1;
+        if (remaining === 0) stop();
+      }
       return undefined;
     });
-    ctx.ui.setStatus(STATUS_KEY, "/debug-keys on");
+    ctx.ui.setStatus(
+      STATUS_KEY,
+      count === undefined ? "/debug-keys on" : `/debug-keys on ${count}`,
+    );
   };
 
   pi.registerCommand("debug-keys", {
@@ -90,9 +98,23 @@ export function createExtension(pi: DebugKeysPi): void {
         return;
       }
 
-      if (command === "on") {
-        start(ctx);
-        print(pi, "/debug-keys: debug key logging enabled");
+      const onMatch = /^on(?:\s+(\d+))?$/.exec(command);
+      if (onMatch) {
+        const count = onMatch[1] === undefined ? undefined : Number(onMatch[1]);
+        if (
+          count !== undefined &&
+          (!Number.isSafeInteger(count) || count < 1)
+        ) {
+          print(pi, usage(`Invalid debug-keys count: ${onMatch[1]}`));
+          return;
+        }
+
+        start(ctx, count);
+        const limit =
+          count === undefined
+            ? ""
+            : ` for ${count} ${count === 1 ? "keystroke" : "keystrokes"}`;
+        print(pi, `/debug-keys: debug key logging enabled${limit}`);
         return;
       }
 
