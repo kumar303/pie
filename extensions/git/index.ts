@@ -1884,8 +1884,12 @@ export class GitComponent implements Component {
       }
       const editor = process.env.PIE_GIT_EDITOR || process.env.EDITOR || "vi";
       const absolutePath = resolve(this.getRepoRoot(), file);
+      const sourceLine = this.activeDiffSourceLines[this.diffCursorIndex];
+      const editTarget = sourceLine
+        ? `${absolutePath}:${sourceLine.line}`
+        : absolutePath;
       try {
-        const command = `${editor} ${shellQuote(absolutePath)}`;
+        const command = `${editor} ${shellQuote(editTarget)}`;
         const result = spawnSync("/bin/bash", ["-c", command], {
           cwd: process.cwd(),
           env: process.env,

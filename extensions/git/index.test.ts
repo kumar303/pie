@@ -949,6 +949,25 @@ describe("diff viewer ('d' from select-files)", () => {
     });
   });
 
+  it("opens the current file at the source line under the diff cursor", async () => {
+    writeFileSync(join(tmpDir, "tracked.txt"), "first\nsecond\nthird\n");
+    execSync("git add . && git commit -m init", { cwd: tmpDir });
+    writeFileSync(join(tmpDir, "tracked.txt"), "first\nchanged\nthird\n");
+    process.env.PIE_GIT_EDITOR = "pie-git-editor --reuse";
+
+    const h = setupExtension();
+    const ui = await openGitUi(h);
+    ui.fireInput("d");
+    while (!ui.renderText().includes("▶+changed")) ui.fireInput(DOWN);
+    ui.fireInput("e");
+
+    const absolutePath = join(process.cwd(), "tracked.txt");
+    expect(spawnSyncMock.calls).toContainEqual({
+      command: "/bin/bash",
+      args: ["-c", `pie-git-editor --reuse '${absolutePath}:2'`],
+    });
+  });
+
   it("shell-quotes diff file paths with spaces and shell metacharacters", async () => {
     const file = "tracked file; $(touch nope) 'quote'.txt";
     writeFileSync(join(tmpDir, file), "original\n");
