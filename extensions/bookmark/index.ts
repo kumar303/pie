@@ -103,6 +103,25 @@ function overlayLine(line: string, width: number): string {
   return truncateToWidth(content, width, "", true);
 }
 
+function frameOverlay(
+  lines: string[],
+  width: number,
+  color: (text: string) => string,
+): string[] {
+  if (width < 2) {
+    return Array(lines.length + 2).fill(width === 1 ? color("│") : "");
+  }
+  const innerWidth = width - 2;
+  const horizontal = "─".repeat(innerWidth);
+  return [
+    color(`╭${horizontal}╮`),
+    ...lines.map(
+      (line) => color("│") + overlayLine(line, innerWidth) + color("│"),
+    ),
+    color(`╰${horizontal}╯`),
+  ];
+}
+
 async function showBookmarks(
   ctx: BookmarkContext,
   sessionId: string,
@@ -221,13 +240,14 @@ async function showBookmarks(
 
       return {
         render(width) {
-          const height = Math.max(
+          const innerHeight = Math.max(
             1,
             Math.min(
               tui.terminal.rows - 2,
               Math.max(18, Math.floor(tui.terminal.rows * 0.7)),
             ),
           );
+          const innerWidth = Math.max(1, width - 2);
           const legend = new TruncatedText(
             theme.fg(
               "dim",
@@ -235,10 +255,10 @@ async function showBookmarks(
             ),
             2,
             1,
-          ).render(width);
+          ).render(innerWidth);
           const nextListHeight = Math.max(
             1,
-            Math.min(bookmarks.length, 8, Math.floor(height / 5)),
+            Math.min(bookmarks.length, 8, Math.floor(innerHeight / 5)),
           );
           if (nextListHeight !== listHeight) {
             listHeight = nextListHeight;
@@ -258,12 +278,15 @@ async function showBookmarks(
               : new Text("No bookmarks in this session.", 0, 0),
           );
           const top = [
-            ...border.render(width),
-            ...listBox.render(width),
-            ...border.render(width),
+            ...border.render(innerWidth),
+            ...listBox.render(innerWidth),
+            ...border.render(innerWidth),
           ];
-          previewHeight = Math.max(1, height - top.length - legend.length - 2);
-          const body = preview.render(width);
+          previewHeight = Math.max(
+            1,
+            innerHeight - top.length - legend.length - 2,
+          );
+          const body = preview.render(innerWidth);
           previewLines = body.length;
           offset = Math.max(0, Math.min(offset, body.length - previewHeight));
           const visible = body.slice(offset, offset + previewHeight);
@@ -274,16 +297,17 @@ async function showBookmarks(
                 ? `Lines ${offset + 1}–${Math.min(offset + previewHeight, body.length)} of ${body.length}`
                 : ""),
           );
-          return [
+          const content = [
             ...top,
             ...visible,
             ...Array(Math.max(0, previewHeight - visible.length)).fill(""),
             position,
             ...legend,
-            ...border.render(width),
-          ]
-            .slice(0, height)
-            .map((line) => overlayLine(line, width));
+            ...border.render(innerWidth),
+          ].slice(0, innerHeight);
+          return frameOverlay(content, width, (text: string) =>
+            theme.fg("borderAccent", text),
+          );
         },
         invalidate() {
           preview.invalidate();

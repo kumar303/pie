@@ -395,21 +395,23 @@ describe("/bookmark", () => {
     );
     // Compare the native content, not its transcript-only shell markers.
     const expected = native.children
-      .flatMap((child) => child.render(100))
+      .flatMap((child) => child.render(98))
       .map((line) => line.trimEnd())
-      .join("\n");
-    const actual = h.ui
-      .render()
-      .map((line) => line.trimEnd())
-      .join("\n");
-    expect(actual).toContain(expected);
+      .filter(Boolean);
+    const expectNativeContent = () => {
+      const actual = h.ui.render().map((line) => line.trimEnd());
+      let nextLine = 0;
+      for (const line of expected) {
+        nextLine = actual.findIndex(
+          (candidate, index) => index >= nextLine && candidate.includes(line),
+        );
+        expect(nextLine).toBeGreaterThanOrEqual(0);
+        nextLine++;
+      }
+    };
+    expectNativeContent();
     h.ui.invalidate();
-    expect(
-      h.ui
-        .render()
-        .map((line) => line.trimEnd())
-        .join("\n"),
-    ).toContain(expected);
+    expectNativeContent();
     await overlay.close();
   });
   it("renders tool-only responses and their saved results without executing tools", async () => {
@@ -457,7 +459,7 @@ describe("/bookmark", () => {
     h.terminal.rows = 20;
     h.terminal.columns = 45;
     const lines = h.ui.render();
-    expect(lines.length).toBeLessThanOrEqual(18);
+    expect(lines.length).toBeLessThanOrEqual(20);
     expect(lines.every((line) => visibleWidth(line) <= 45)).toBe(true);
     expect(h.ui.plain()).toContain("Esc close");
     h.ui.press(KEY.arrowDown);
@@ -547,6 +549,18 @@ describe("/bookmark", () => {
     );
     expect(h.output()).toContain("Transcript line");
     expect(h.output()).not.toContain("\x1b]133;");
+  });
+  it("draws a visible border around the full overlay", async () => {
+    const h = harness();
+    h.append(textResponse("Bordered response"));
+    await h.invoke();
+    const overlay = await h.show();
+    const lines = h.ui.render(60).map(stripVTControlCharacters);
+    expect(lines[0]).toBe(`╭${"─".repeat(58)}╮`);
+    expect(lines.at(-1)).toBe(`╰${"─".repeat(58)}╯`);
+    expect(lines.slice(1, -1).every((line) => /^│.*│$/.test(line))).toBe(true);
+    expect(h.ui.render(1).every((line) => visibleWidth(line) <= 1)).toBe(true);
+    await overlay.close();
   });
   it("fills the overlay rectangle through response scrolling and terminal resizing", async () => {
     const h = harness();
