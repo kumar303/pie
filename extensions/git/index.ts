@@ -21,7 +21,7 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { complete, type UserMessage } from "@earendil-works/pi-ai";
+import type { UserMessage } from "@earendil-works/pi-ai";
 import {
   Editor,
   Input,
@@ -733,7 +733,7 @@ export class GitComponent implements Component {
         timestamp: Date.now(),
       };
 
-      const response = await complete(
+      const response = await this.ctx.modelRegistry.complete(
         this.ctx.model,
         {
           systemPrompt:

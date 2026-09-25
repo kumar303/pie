@@ -25,7 +25,8 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   Input,
   Text,
-  TUI,
+  TuiMainScreen,
+  type TUI,
   type Component,
   type Terminal,
   visibleWidth,
@@ -123,7 +124,7 @@ function harness({ live = false } = {}) {
     setTitle() {},
     setProgress() {},
   } satisfies Terminal;
-  const tui = new TUI(terminal);
+  const tui = new TuiMainScreen(terminal);
   if (!live) vi.spyOn(tui, "requestRender").mockImplementation(() => {});
   let component: (Component & { dispose?(): void }) | undefined;
   let closed = false;
